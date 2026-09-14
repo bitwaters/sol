@@ -1,3 +1,4 @@
+import { EvaluationScheduler } from './signal/scheduler.js';
 import { evaluateOutcomes } from './backtest/evaluate.js';
 import { sampleControls } from './backtest/control.js';
 import { sendDailyReport } from './backtest/report.js';
@@ -50,7 +51,7 @@ async function main(): Promise<void> {
   });
   const gateway = new GmgnGateway({
     client,
-    limiter: new TokenBucket({ ratePerSecond, capacity: Math.max(ratePerSecond, 5) }),
+    limiter: new TokenBucket({ ratePerSecond, capacity: 5 }),
     banGate: new BanGate(),
     logger: log,
   });
@@ -67,16 +68,13 @@ async function main(): Promise<void> {
   };
 
   // 成交流入库回调：应用持仓周期 + 调度候选评估
-  const pendingEvaluations = new Set<string>();
-  const scheduleEvaluation = (token: string): void => {
-    if (pendingEvaluations.has(token)) return;
-    pendingEvaluations.add(token);
-    setTimeout(() => {
-      void evaluateToken(engineDeps, token)
-        .catch((err: unknown) => log.error('候选评估失败', { token, error: err }))
-        .finally(() => pendingEvaluations.delete(token));
-    }, 250);
-  };
+  const evaluationScheduler = new EvaluationScheduler({
+    concurrency: 2,
+    delayMs: 250,
+    run: (token) => evaluateToken(engineDeps, token),
+    onError: (token, error) => log.error('候选评估失败', { token, error }),
+  });
+  const scheduleEvaluation = (token: string): void => evaluationScheduler.schedule(token);
 
   const onTrades = (trades: NormalizedTrade[]): void => {
     let observationStartedAt = getKv<number>(db, 'observation_started_at');
@@ -349,6 +347,7 @@ async function main(): Promise<void> {
     if (pushTimer) clearInterval(pushTimer);
     for (const hook of shutdownHooks) hook();
     for (const poller of pollers) poller.stop();
+    evaluationScheduler.stop();
     closeDb(db);
     process.exit(0);
   };

@@ -87,9 +87,12 @@ export class GmgnGateway {
 
   /** 调用前：封禁门 → 权重获取 → 再查封禁门（等待期间可能新增封禁）→ 执行 */
   async call<T>(route: RouteName, fn: (client: OpenApiClient) => Promise<T>): Promise<T> {
-    await this.banGate.waitIfBanned();
-    await this.limiter.acquire(ROUTE_WEIGHTS[route]);
-    await this.banGate.waitIfBanned();
+    // 排队期间可能新增封禁；过期的额度不能攒到解禁后集中释放。
+    while (true) {
+      await this.banGate.waitIfBanned();
+      await this.limiter.acquire(ROUTE_WEIGHTS[route]);
+      if (!this.banGate.isBanned) break;
+    }
     try {
       return await fn(this.client);
     } catch (err) {

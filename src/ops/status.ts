@@ -22,6 +22,7 @@ if (!existsSync(dbPath)) {
       rulesVersion: loaded.rulesVersion,
       configVersion: loaded.configVersion,
       dryRun: loaded.dryRun,
+      ratePerSecond: loaded.env.GMGN_RATE_LIMIT_PER_SEC,
       uptimeSeconds: started === null ? null : now - started,
       enabledSources: getKv<string[]>(db, 'enabled_sources'),
       sourceHealth: db.prepare(`SELECT source, ? - last_success_at AS last_success_age_seconds,

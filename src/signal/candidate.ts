@@ -589,6 +589,16 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
     });
   };
 
+  // 原始买入钱包数是有效票数的上界；尚未形成候选时先做本地筛选，
+  // 避免首次采集把每个历史代币都送往远端富化。已有候选/推送仍完整重验。
+  if (existing === null && pushed === null) {
+    const raw = db.prepare(`SELECT COUNT(DISTINCT maker) AS wallets FROM trades
+      WHERE base_address=? AND side='buy' AND timestamp>=? AND timestamp<=?
+        AND amount_usd_num>=?`).get(token, now - config.signal.windowMinutes * 60, now,
+          config.tradeFilter.minTradeAmountUsd) as { wallets: number };
+    if (raw.wallets < config.signal.minDistinctWallets) return base;
+  }
+
   // 富化（失败 → suppressed）
   let tokenSnapshot: TokenSnapshot;
   try {
