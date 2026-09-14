@@ -14,6 +14,8 @@
 
 首次只读联调先在本地执行 `node scripts/prepare-sea-env.mjs`，生成被 Git 忽略的 `data/deployment/sea.env`（权限 600）。该文件仅包含 GMGN API Key、签名私钥、限流参数和 `DRY_RUN=1`，不含 Telegram 凭证。本地确认授权传输范围后再经 SSH 安装到上述受限路径，不能把凭证提交 GitHub。
 
+正式推送获用户明确授权后，在本地执行 `node scripts/prepare-sea-env.mjs --live`。它只在部署文件中设定 `DRY_RUN=0`，并加入 `TG_BOT_TOKEN`、`TG_CHAT_ID`、`TG_ADMIN_IDS`、`TG_ALERT_CHAT_ID`；不会修改本地 `.env`。将该文件通过 SSH 原子替换到 `/etc/sol/sol.env` 后，以 Compose 重建容器加载配置，再检查 Bot 启动日志、paused 状态及目标聊天权限。不要用 `docker run --env-file` 直接加载此带引号的 dotenv 文件；一次性诊断可在 root 只读容器内挂载为 `/app/.env`，由 dotenv 解析，不放宽宿主机文件权限。
+
 首次部署将空目录检出 `origin/main`；若目录已有仓库，应核验远端地址和未提交改动，不能覆盖未知文件。凭证文件从本地传输，不通过 GitHub，也不在服务器上手改。联调沿用 `DRY_RUN=1`。
 
 SEA 初始联调使用每秒 10 权重、突发容量 5。启动时先按本地买入钱包数量做候选预筛选，跨代币最多并发 2 个评估；封禁期间取得的旧额度不能在解禁后集中使用。限流配置在本地准备，再随已授权的保密配置更新，不手改服务器文件。
