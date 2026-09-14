@@ -1,3 +1,4 @@
+import { createResearchSchedule } from './research/scheduler.js';
 import { captureDelivery } from './research/delivery.js';
 import { loadResearchConfig } from './research/config.js';
 import { reserveResearch, collectResearch } from './research/collector.js';
@@ -187,30 +188,25 @@ async function main(): Promise<void> {
   // M4/M5：数据评估、对照采样、退出监控、备份与候选维护（不依赖 Telegram）
   const measurementGateway = gateway.background();
   const researchDeps = { ...engineDeps, gateway: measurementGateway, research: research.config, researchVersion: research.version };
-  let measuring = false;
-  const runMeasurements = async (): Promise<void> => {
-    if (measuring) return;
-    measuring = true;
-    try {
-      await collectResearch(researchDeps);
-      await evaluateResearchOutcomes(researchDeps);
-      await repairBaselines({ ...engineDeps, gateway: measurementGateway, maxPerRun: 4 });
-      await evaluateOutcomes({ db, config, gateway: measurementGateway,
-        logger: log.child({ module: 'backtest' }), maxPerRun: 4 });
-    } catch (err) { log.error('回测失败', { error: err }); }
-    finally { measuring = false; }
-  };
-  const backtestTimer = setInterval(() => { void runMeasurements(); }, 30_000);
+  const measurementSchedule = createResearchSchedule({
+    collect: () => collectResearch(researchDeps),
+    pending: () => research.config.enabled && Boolean(db.prepare("SELECT 1 FROM research_samples WHERE state='pending' LIMIT 1").get()),
+    backgroundJobs: [
+      () => evaluateResearchOutcomes(researchDeps),
+      () => repairBaselines({ ...engineDeps, gateway: measurementGateway, maxPerRun: 1 }),
+      () => evaluateOutcomes({ db, config, gateway: measurementGateway,
+        logger: log.child({ module: 'backtest' }), maxPerRun: 1 }),
+    ],
+    onError: error => log.error('研究或回测任务失败', { error }),
+  });
   const runControls = (): void => {
-    try {
-      const created = reserveResearch(researchDeps);
-      if (created > 0) void runMeasurements();
-    } catch (err) {
-      log.error('对照采样失败', { error: err });
-    }
+    try { reserveResearch(researchDeps); }
+    catch (error) { log.error('研究采样失败', { error }); }
+    // Capture cadence is independent of slower historic outcome batches, including when no new run is due.
+    void measurementSchedule.collectOnce();
   };
-  // The persisted 15-minute gate survives restarts; polling this gate creates no extra samples.
   const controlTimer = setInterval(runControls, 30_000);
+  const backtestTimer = setInterval(() => { void measurementSchedule.measureOnce(); }, 30_000);
   runControls();
   const exitTimer = setInterval(() => {
     try {

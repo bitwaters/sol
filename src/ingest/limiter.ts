@@ -37,6 +37,9 @@ export class TokenBucket {
     this.lastRefillMs = this.clock.now();
   }
 
+  /** Fixed burst capacity, used to reserve feasible background headroom. */
+  get capacity(): number { return this.opts.capacity; }
+
   /** 当前可用权重（含补算） */
   get available(): number {
     this.refill();

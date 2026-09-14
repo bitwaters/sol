@@ -158,3 +158,22 @@ describe('research review regressions',()=>{
     expect(()=>replay(s.freeze(),{parameter:'dustRatio',value:.02})).toThrow('zero_checkpoint');
   });
 });
+describe('research scheduler isolation',()=>{
+  it('captures while an old outcome is in flight and yields remaining background work to pending captures',async()=>{
+    const {createResearchSchedule}=await import('../src/research/scheduler.js');
+    let release!:()=>void,pending=false;
+    const slow=vi.fn(()=>new Promise<void>(resolve=>{release=resolve;})),next=vi.fn(async()=>{}),collect=vi.fn(async()=>{});
+    const schedule=createResearchSchedule({collect,pending:()=>pending,backgroundJobs:[slow,next],onError:()=>{}});
+    const running=schedule.measureOnce();pending=true;await schedule.collectOnce();expect(collect).toHaveBeenCalledTimes(1);
+    await schedule.measureOnce();expect(slow).toHaveBeenCalledTimes(1);release();await running;expect(next).not.toHaveBeenCalled();
+  });
+});
+it('background wallet enrichment can acquire weight three without exceeding a capacity-five bucket',async()=>{
+  const {GmgnGateway}=await import('../src/ingest/gateway.js');
+  const {TokenBucket,BanGate}=await import('../src/ingest/limiter.js');
+  const bucket=new TokenBucket({ratePerSecond:10,capacity:5});
+  const getWalletStats=vi.fn(async()=>({}));
+  const gateway=new GmgnGateway({client:{getWalletStats} as never,limiter:bucket,banGate:new BanGate()});
+  await gateway.background().fetchWalletStats('test-wallet');
+  expect(getWalletStats).toHaveBeenCalledTimes(1);expect(bucket.available).toBeGreaterThanOrEqual(2);expect(bucket.available).toBeLessThan(3);
+});

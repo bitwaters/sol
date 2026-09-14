@@ -99,13 +99,15 @@ export class GmgnGateway {
       if (this.backgroundInFlight) throw new BackgroundBusyError();
       this.backgroundInFlight = true;
       const deadline = performance.now() + 5000;
+      const reserve = Math.max(0, Math.min(3, this.limiter.capacity - ROUTE_WEIGHTS[route]));
       while (true) {
         if (this.banGate.isBanned || performance.now() >= deadline) {
           this.backgroundInFlight = false;
           throw new BackgroundBusyError();
         }
-        // Leave three units for the follow feed; never jump ahead of queued foreground work.
-        if (this.now() >= this.backgroundNextAt && this.limiter.available >= ROUTE_WEIGHTS[route] + 3
+        // Reserve three units where capacity permits (wallet stats: weight 3 + headroom 2 in a capacity-5 bucket).
+        // Never jump ahead of queued foreground work; total rate/capacity and request weight are unchanged.
+        if (this.now() >= this.backgroundNextAt && this.limiter.available >= ROUTE_WEIGHTS[route] + reserve
           && this.limiter.tryAcquire(ROUTE_WEIGHTS[route])) {
           this.backgroundNextAt = this.now() + ROUTE_WEIGHTS[route] * 1000;
           break;
