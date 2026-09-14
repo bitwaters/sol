@@ -97,3 +97,9 @@
 数据库、API 的原始字段和策略阈值不变，仅显示层翻译。帮助快捷按钮与输入指令复用处理逻辑、管理员鉴权。启动时通过 setMyCommands 和 setChatMenuButton 同步 Telegram 菜单。
 
 参考：[Telegram 命令菜单 API](https://core.telegram.org/bots/api#setmycommands)、[GMGN 开发者持仓状态定义](https://github.com/GMGNAI/gmgn-skills/blob/main/skills/gmgn-token/SKILL.md)。
+
+## 2026-09-14 部署验收
+
+应用提交 `969bc69` 已通过 GitHub 部署 SEA，沿用正式推送模式（DRY_RUN=0）。本地 19 个测试文件、138 项测试通过，类型检查及生产构建通过。
+
+Telegram API 回读确认 11 项命令及中文说明与代码目录完全一致，菜单类型为命令菜单，包含 /help。以 SEA 只读生产数据库生成帮助、状态、配置、钱包、统计五类回复，原始字段检查通过；当前 3 类拦截原因均有中文映射，配置回复 909 字符。验证没有另发测试消息、没有模拟管理员身份更改线上状态。
