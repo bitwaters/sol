@@ -2,6 +2,8 @@ import { readFileSync } from 'node:fs';
 import type { Logger } from '../logger.js';
 import type { Db } from '../store/db.js';
 
+export const WALLET_PROFILE_TTL_SEC = 1800;
+
 export interface WalletProfile {
   address: string;
   name: string | null;

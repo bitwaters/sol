@@ -194,9 +194,9 @@ async function main(): Promise<void> {
     finally { measuring = false; }
   };
   const backtestTimer = setInterval(() => { void runMeasurements(); }, 30_000);
-  const controlTimer = setInterval(() => {
+  const runControls = (): void => {
     try {
-      sampleControls({
+      const created = sampleControls({
         db,
         config,
         logger: log.child({ module: 'control' }),
@@ -204,11 +204,14 @@ async function main(): Promise<void> {
         configVersion: loaded.configVersion,
         rulesVersion: loaded.rulesVersion,
       });
-      void runMeasurements();
+      if (created > 0) void runMeasurements();
     } catch (err) {
       log.error('对照采样失败', { error: err });
     }
-  }, 900_000);
+  };
+  // The persisted 15-minute gate survives restarts; polling this gate creates no extra samples.
+  const controlTimer = setInterval(runControls, 30_000);
+  runControls();
   const exitTimer = setInterval(() => {
     try {
       const created = runExitMonitor({

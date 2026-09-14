@@ -7,6 +7,7 @@ import type { AppConfig } from '../config.js';
 import { enrichToken, type EnrichGateway, type TokenSnapshot } from '../enrich/token.js';
 import {
   enrichWallets,
+  WALLET_PROFILE_TTL_SEC,
   getWalletProfile,
   type CexBlacklist,
   type WalletGateway,
@@ -640,7 +641,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
   // 画像按需补拉（§7.2）：补拉完成后重新过滤/聚类/计票
   const missingProfiles = walletsInWindow
     .map((r) => r.maker)
-    .filter((wallet) => { const profile = getWalletProfile(db, wallet); return !profile || now - profile.refreshedAt > 1800; });
+    .filter((wallet) => { const profile = getWalletProfile(db, wallet); return !profile || now - profile.refreshedAt > WALLET_PROFILE_TTL_SEC; });
   if (missingProfiles.length > 0) {
     try {
       await measureAsync('evaluation.wallet_enrich', () => enrichWallets(db, gateway, missingProfiles, { logger, now: deps.now }));

@@ -241,3 +241,24 @@ it('treats malformed numeric-prefix prices as recoverable, not ready legacy base
   expect((await repairBaselines(s.deps)).historical).toBe(1);
   expect(getQuality(s.db, 1)?.anchor_price).toBe('2');
 });
+
+it('control feature completeness uses the same 30-minute wallet-profile TTL as live evaluation', async () => {
+  const s = scenario(); const t = Math.floor(s.deps.now() / 1000);
+  await enrichToken(s.db, s.deps.gateway, 'T', { now: s.deps.now });
+  expect(captureFeatures(s.db, config, blacklist, 'T', t).complete).toBe(true);
+  s.db.prepare('UPDATE wallets SET refreshed_at=?').run(t - 1801);
+  expect(captureFeatures(s.db, config, blacklist, 'T', t).complete).toBe(false);
+});
+
+it('frequent scheduler checks respect the persisted control gate across dependency recreation', () => {
+  const s = scenario(); const t = Math.floor(s.deps.now() / 1000);
+  const deps = { ...s.deps, targetVotes: 3 };
+  expect(sampleControls(deps)).toBe(1);
+  s.setNow(t + 30);
+  expect(sampleControls({ ...deps })).toBe(0);
+  // Simulate a prior interval elapsed before service restart. Existing token deduplication still applies.
+  setKv(s.db, 'control_last_sample_at', t - 900);
+  sampleControls({ ...deps });
+  expect(getKv(s.db, 'control_last_sample_at')).toBe(t + 30);
+  expect(s.db.prepare("SELECT COUNT(*) n FROM signals WHERE status='control'").get()).toEqual({ n: 1 });
+});

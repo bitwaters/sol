@@ -1,13 +1,13 @@
 import type { AppConfig } from '../config.js';
 import { CACHE_TTL, getCachedToken, rowToSnapshot, type TokenSnapshot } from '../enrich/token.js';
-import { getWalletProfile, type CexBlacklist } from '../enrich/wallet.js';
+import { getWalletProfile, WALLET_PROFILE_TTL_SEC, type CexBlacklist } from '../enrich/wallet.js';
 import { buildClusters } from '../signal/cluster.js';
 import { validateTokenSnapshot } from '../signal/validate-token.js';
 import { validateWallets } from '../signal/validate-wallet.js';
 import { computeWindow } from '../signal/window.js';
 import { getKv, type Db } from '../store/db.js';
 
-export const QUALITY_VERSION = 'measurement-2026-09-14.1';
+export const QUALITY_VERSION = 'measurement-2026-09-14.2';
 export function fresh(timestamp: number | null | undefined, now: number, ttl: number): boolean {
   return timestamp != null && timestamp <= now && now - timestamp <= ttl;
 }
@@ -47,7 +47,7 @@ export function captureFeatures(db: Db, config: AppConfig, blacklist: CexBlackli
   const profiles = window.votingWallets.map(wallet => getWalletProfile(db, wallet));
   const complete = snapshot !== null && fresh(snapshot.priceUpdatedAt, now, CACHE_TTL.price)
     && fresh(snapshot.riskUpdatedAt, now, CACHE_TTL.risk) && fresh(snapshot.basicUpdatedAt, now, CACHE_TTL.basic)
-    && profiles.every(profile => profile && profile.walletCreatedAt !== null && fresh(profile.refreshedAt, now, 86400));
+    && profiles.every(profile => profile && profile.walletCreatedAt !== null && fresh(profile.refreshedAt, now, WALLET_PROFILE_TTL_SEC));
   return {
     qualityVersion: QUALITY_VERSION, sampledAt: now, windowStart: window.windowStart, windowEnd: now,
     votes: window.votes, rawVotes: window.votes,
