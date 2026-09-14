@@ -1,0 +1,54 @@
+{
+  "wallet_address": "sample-address-105",
+  "native_balance": "14.564333882",
+  "realized_profit": "2203.31566761277170491907",
+  "realized_profit_pnl": "0.0136020125864546",
+  "buy": 746,
+  "sell": 749,
+  "bought_cost": "162208.03187922220143033405",
+  "bought_fee": "907.1255687280514381061",
+  "sold_income": "164187.84947159729460541547",
+  "sold_fee": "697.45671745222819373025",
+  "total_cost": "173611.43275013052429493684",
+  "last_timestamp": 1789299109,
+  "pnl_stat": {
+    "token_num": 381,
+    "winrate": 0.5082417582417582,
+    "pnl_lt_nd5_num": 4,
+    "pnl_nd5_0x_num": 166,
+    "pnl_0x_2x_num": 211,
+    "pnl_2x_5x_num": 0,
+    "pnl_gt_5x_num": 0,
+    "avg_holding_period": 30062.388198757762
+  },
+  "common": {
+    "avatar": "",
+    "name": "",
+    "ens": "",
+    "tag": "",
+    "tags": [
+      "smart_degen"
+    ],
+    "tag_rank": {
+      "smart_degen": 0
+    },
+    "nick_name": "",
+    "created_at": 1784273270,
+    "twitter_name": "",
+    "twitter_username": "",
+    "is_blue_verified": false,
+    "twitter_bind": false,
+    "twitter_fans_num": 0,
+    "twitter_description": "",
+    "followers_count": 0,
+    "follow_count": 3,
+    "remark_count": 4,
+    "created_token_count": 0,
+    "fund_from": "",
+    "fund_from_ts": 1784273270,
+    "fund_tx_hash": "sample-transaction-106",
+    "wallet_address": "",
+    "fund_from_address": "sample-address-107",
+    "fund_amount": "0.2191"
+  }
+}

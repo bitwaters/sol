@@ -1,0 +1,708 @@
+{
+  "list": [
+    {
+      "transaction_hash": "sample-transaction-1",
+      "maker": "sample-address-2",
+      "base_amount": 12650207.669596,
+      "quote_amount": 1.510836304,
+      "buy_cost_usd": 109.36233508206,
+      "token_amount": 12650207.669596,
+      "amount_usd": 150.73613805008,
+      "price": 1.1943173926158e-7,
+      "price_usd": 0.000011915704626127836,
+      "timestamp": 1789299273,
+      "side": "sell",
+      "is_open_or_close": 1,
+      "base_address": "sample-address-3",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-4",
+        "logo": "https://example.invalid/fixture/sample-link-5",
+        "total_supply": "1000000000",
+        "launchpad": "pump"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-6",
+        "name": "",
+        "tags": [
+          "kol",
+          "wash_trader",
+          "launchpad_smart",
+          "arbitrager",
+          "top_followed",
+          "top_renamed",
+          "axiom"
+        ],
+        "twitter_username": "sample-label-7",
+        "twitter_name": "sample-label-8"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-9",
+      "maker": "sample-address-10",
+      "base_amount": 0.00410748,
+      "quote_amount": 3.154390262,
+      "buy_cost_usd": 0,
+      "token_amount": 0.00410748,
+      "amount_usd": 314.74506034236,
+      "price": 767.962415398249,
+      "price_usd": 76627.28980843729,
+      "timestamp": 1789299271,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-11",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-12",
+        "logo": "https://example.invalid/fixture/sample-link-13",
+        "total_supply": "2448",
+        "launchpad": "stonkfun"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-14",
+        "name": "",
+        "tags": [
+          "kol",
+          "wash_trader",
+          "launchpad_smart",
+          "top_followed",
+          "top_renamed",
+          "arbitrager",
+          "axiom"
+        ],
+        "twitter_username": "sample-label-15",
+        "twitter_name": "sample-label-15"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-9",
+      "maker": "sample-address-10",
+      "base_amount": 7050064.635507,
+      "quote_amount": 0.00410748,
+      "buy_cost_usd": 54.56194667712335,
+      "token_amount": 7050064.635507,
+      "amount_usd": 314.9628136440045,
+      "price": 5.8261593508e-10,
+      "price_usd": 0.000044675166814355625,
+      "timestamp": 1789299271,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-16",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-17",
+        "logo": "https://example.invalid/fixture/sample-link-18",
+        "total_supply": "960215057",
+        "launchpad": "pump"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-14",
+        "name": "",
+        "tags": [
+          "kol",
+          "wash_trader",
+          "launchpad_smart",
+          "top_followed",
+          "top_renamed",
+          "arbitrager",
+          "axiom"
+        ],
+        "twitter_username": "sample-label-15",
+        "twitter_name": "sample-label-15"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-19",
+      "maker": "sample-address-10",
+      "base_amount": 0.00436955,
+      "quote_amount": 3.355786932,
+      "buy_cost_usd": 0,
+      "token_amount": 0.00436955,
+      "amount_usd": 334.84042007496,
+      "price": 767.9937137691525,
+      "price_usd": 76630.41275988604,
+      "timestamp": 1789299270,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-11",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-12",
+        "logo": "https://example.invalid/fixture/sample-link-13",
+        "total_supply": "2448",
+        "launchpad": "stonkfun"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-14",
+        "name": "",
+        "tags": [
+          "kol",
+          "wash_trader",
+          "launchpad_smart",
+          "top_followed",
+          "top_renamed",
+          "arbitrager",
+          "axiom"
+        ],
+        "twitter_username": "sample-label-15",
+        "twitter_name": "sample-label-15"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-19",
+      "maker": "sample-address-10",
+      "base_amount": 7050064.635507,
+      "quote_amount": 0.00436955,
+      "buy_cost_usd": 54.56194667712335,
+      "token_amount": 7050064.635507,
+      "amount_usd": 335.0584208220514,
+      "price": 6.1978864392e-10,
+      "price_usd": 0.00004752558141576957,
+      "timestamp": 1789299270,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-16",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-17",
+        "logo": "https://example.invalid/fixture/sample-link-18",
+        "total_supply": "960215057",
+        "launchpad": "pump"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-14",
+        "name": "",
+        "tags": [
+          "kol",
+          "wash_trader",
+          "launchpad_smart",
+          "top_followed",
+          "top_renamed",
+          "arbitrager",
+          "axiom"
+        ],
+        "twitter_username": "sample-label-15",
+        "twitter_name": "sample-label-15"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-20",
+      "maker": "sample-address-2",
+      "base_amount": 12650207.669596,
+      "quote_amount": 1.096034627,
+      "buy_cost_usd": 0,
+      "token_amount": 12650207.669596,
+      "amount_usd": 109.36233508206,
+      "price": 8.664163115948e-8,
+      "price_usd": 0.000008645101957092914,
+      "timestamp": 1789299261,
+      "side": "buy",
+      "is_open_or_close": 1,
+      "base_address": "sample-address-3",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-4",
+        "logo": "https://example.invalid/fixture/sample-link-5",
+        "total_supply": "1000000000",
+        "launchpad": "pump"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-6",
+        "name": "",
+        "tags": [
+          "kol",
+          "wash_trader",
+          "launchpad_smart",
+          "arbitrager",
+          "top_followed",
+          "top_renamed",
+          "axiom"
+        ],
+        "twitter_username": "sample-label-7",
+        "twitter_name": "sample-label-8"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-21",
+      "maker": "sample-address-22",
+      "base_amount": 0.372430824,
+      "quote_amount": 37.152192,
+      "buy_cost_usd": 0,
+      "token_amount": 0.372430824,
+      "amount_usd": 37.152192,
+      "price": 99.75595360495726,
+      "price_usd": 99.75595360495726,
+      "timestamp": 1789299260,
+      "side": "buy",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-23",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-24",
+        "logo": "https://example.invalid/fixture/sample-link-25",
+        "total_supply": "572748980",
+        "launchpad": ""
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-21",
+      "maker": "sample-address-22",
+      "base_amount": 0.11188925,
+      "quote_amount": 37.152192,
+      "buy_cost_usd": 37.24813514050353,
+      "token_amount": 0.11188925,
+      "amount_usd": 37.152192,
+      "price": 332.04433848649444,
+      "price_usd": 332.04433848649444,
+      "timestamp": 1789299260,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-29",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-30",
+        "logo": "https://example.invalid/fixture/sample-link-31",
+        "total_supply": "153764",
+        "launchpad": "xstocks"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-21",
+      "maker": "sample-address-22",
+      "base_amount": 2265820.258085,
+      "quote_amount": 0.11188925,
+      "buy_cost_usd": 31.928820117686687,
+      "token_amount": 2265820.258085,
+      "amount_usd": 37.18288608922354,
+      "price": 4.93813441736e-8,
+      "price_usd": 0.0000164103423281478,
+      "timestamp": 1789299260,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-32",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-33",
+        "logo": "https://example.invalid/fixture/sample-link-34",
+        "total_supply": "1000000000",
+        "launchpad": "ray_launchpad"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-35",
+      "maker": "sample-address-10",
+      "base_amount": 2771017.537377,
+      "quote_amount": 0.10987321,
+      "buy_cost_usd": 0,
+      "token_amount": 2771017.537377,
+      "amount_usd": 23.68542959924914,
+      "price": 3.965085334826e-8,
+      "price_usd": 0.000008547556729528192,
+      "timestamp": 1789299256,
+      "side": "buy",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-36",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-37",
+        "logo": "https://example.invalid/fixture/sample-link-38",
+        "total_supply": "1000000000",
+        "launchpad": "pump"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-14",
+        "name": "",
+        "tags": [
+          "kol",
+          "wash_trader",
+          "launchpad_smart",
+          "top_followed",
+          "top_renamed",
+          "arbitrager",
+          "axiom"
+        ],
+        "twitter_username": "sample-label-15",
+        "twitter_name": "sample-label-15"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-35",
+      "maker": "sample-address-10",
+      "base_amount": 0.11421322,
+      "quote_amount": 0.2475,
+      "buy_cost_usd": 0,
+      "token_amount": 0.11421322,
+      "amount_usd": 24.6906,
+      "price": 2.166999582009858,
+      "price_usd": 216.17987830130346,
+      "timestamp": 1789299256,
+      "side": "buy",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-39",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-40",
+        "logo": "https://example.invalid/fixture/sample-link-41",
+        "total_supply": "321280",
+        "launchpad": "xstocks"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-14",
+        "name": "",
+        "tags": [
+          "kol",
+          "wash_trader",
+          "launchpad_smart",
+          "top_followed",
+          "top_renamed",
+          "arbitrager",
+          "axiom"
+        ],
+        "twitter_username": "sample-label-15",
+        "twitter_name": "sample-label-15"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-42",
+      "maker": "sample-address-22",
+      "base_amount": 0.439721956,
+      "quote_amount": 43.8636,
+      "buy_cost_usd": 0,
+      "token_amount": 0.439721956,
+      "amount_usd": 43.8636,
+      "price": 99.75303575698639,
+      "price_usd": 99.75303575698639,
+      "timestamp": 1789299255,
+      "side": "buy",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-23",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-24",
+        "logo": "https://example.invalid/fixture/sample-link-25",
+        "total_supply": "572748980",
+        "launchpad": ""
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-42",
+      "maker": "sample-address-22",
+      "base_amount": 0.13209187,
+      "quote_amount": 43.8636,
+      "buy_cost_usd": 43.97362413924326,
+      "token_amount": 0.13209187,
+      "amount_usd": 43.8636,
+      "price": 332.06888508732595,
+      "price_usd": 332.06888508732595,
+      "timestamp": 1789299255,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-29",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-30",
+        "logo": "https://example.invalid/fixture/sample-link-31",
+        "total_supply": "153764",
+        "launchpad": "xstocks"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-42",
+      "maker": "sample-address-22",
+      "base_amount": 2517578.064539,
+      "quote_amount": 0.13209187,
+      "buy_cost_usd": 35.47646679743122,
+      "token_amount": 2517578.064539,
+      "amount_usd": 43.91515960207469,
+      "price": 5.246783480543e-8,
+      "price_usd": 0.0000174434152492182,
+      "timestamp": 1789299255,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-32",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-33",
+        "logo": "https://example.invalid/fixture/sample-link-34",
+        "total_supply": "1000000000",
+        "launchpad": "ray_launchpad"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-43",
+      "maker": "sample-address-22",
+      "base_amount": 0.485441732,
+      "quote_amount": 48.424249,
+      "buy_cost_usd": 0,
+      "token_amount": 0.485441732,
+      "amount_usd": 48.424249,
+      "price": 99.7529586104888,
+      "price_usd": 99.7529586104888,
+      "timestamp": 1789299254,
+      "side": "buy",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-23",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-24",
+        "logo": "https://example.invalid/fixture/sample-link-25",
+        "total_supply": "572748980",
+        "launchpad": ""
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-43",
+      "maker": "sample-address-22",
+      "base_amount": 0.14582731,
+      "quote_amount": 48.424249,
+      "buy_cost_usd": 48.54617713548086,
+      "token_amount": 0.14582731,
+      "amount_usd": 48.424249,
+      "price": 332.06570840537347,
+      "price_usd": 332.06570840537347,
+      "timestamp": 1789299254,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-29",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-30",
+        "logo": "https://example.invalid/fixture/sample-link-31",
+        "total_supply": "153764",
+        "launchpad": "xstocks"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-43",
+      "maker": "sample-address-22",
+      "base_amount": 2797308.960599,
+      "quote_amount": 0.14582731,
+      "buy_cost_usd": 39.41829644159181,
+      "token_amount": 2797308.960599,
+      "amount_usd": 48.4701500543906,
+      "price": 5.213128476476e-8,
+      "price_usd": 0.00001732742100965919,
+      "timestamp": 1789299254,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-32",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-33",
+        "logo": "https://example.invalid/fixture/sample-link-34",
+        "total_supply": "1000000000",
+        "launchpad": "ray_launchpad"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-44",
+      "maker": "sample-address-22",
+      "base_amount": 0.577279534,
+      "quote_amount": 57.585313,
+      "buy_cost_usd": 0,
+      "token_amount": 0.577279534,
+      "amount_usd": 57.585313,
+      "price": 99.7529093071919,
+      "price_usd": 99.7529093071919,
+      "timestamp": 1789299253,
+      "side": "buy",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-23",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-24",
+        "logo": "https://example.invalid/fixture/sample-link-25",
+        "total_supply": "572748980",
+        "launchpad": ""
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-44",
+      "maker": "sample-address-22",
+      "base_amount": 0.17339115,
+      "quote_amount": 57.585313,
+      "buy_cost_usd": 57.72222968129037,
+      "token_amount": 0.17339115,
+      "amount_usd": 57.585313,
+      "price": 332.11218104268875,
+      "price_usd": 332.11218104268875,
+      "timestamp": 1789299253,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-29",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-30",
+        "logo": "https://example.invalid/fixture/sample-link-31",
+        "total_supply": "153764",
+        "launchpad": "xstocks"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    },
+    {
+      "transaction_hash": "sample-transaction-44",
+      "maker": "sample-address-22",
+      "base_amount": 3108121.067332,
+      "quote_amount": 0.17339115,
+      "buy_cost_usd": 43.7981071573211,
+      "token_amount": 3108121.067332,
+      "amount_usd": 57.631832189754775,
+      "price": 5.578648522493e-8,
+      "price_usd": 0.000018542338262012797,
+      "timestamp": 1789299253,
+      "side": "sell",
+      "is_open_or_close": 0,
+      "base_address": "sample-address-32",
+      "balance": 0,
+      "base_token": {
+        "symbol": "sample-label-33",
+        "logo": "https://example.invalid/fixture/sample-link-34",
+        "total_supply": "1000000000",
+        "launchpad": "ray_launchpad"
+      },
+      "maker_info": {
+        "avatar": "https://example.invalid/fixture/sample-link-26",
+        "name": "",
+        "tags": [
+          "kol",
+          "smart_degen",
+          "top_followed",
+          "gmgn"
+        ],
+        "twitter_username": "sample-label-27",
+        "twitter_name": "sample-label-28"
+      }
+    }
+  ]
+}

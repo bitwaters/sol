@@ -1,0 +1,36 @@
+{
+  "name": "meme-signal-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Solana meme 币聪明钱共识信号 Bot（GMGN → Telegram）",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "debug:live": "node --import tsx scripts/debug-live.ts",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify:contract": "tsx scripts/verify-contract.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "decimal.js": "^10.6.0",
+    "dotenv": "^17.4.2",
+    "grammy": "^1.46.0",
+    "jsonc-parser": "^3.3.1",
+    "undici": "^8.10.2",
+    "zod": "^4.6.4"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.5.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

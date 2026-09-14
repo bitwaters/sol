@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# 依赖与构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 环境变量与密钥（绝不入库）
+.env
+.env.*
+!.env.example
+*.pem
+
+# 数据与日志
+data/*
+!data/cex-blacklist.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+logs/
+*.log
+
+# 临时与缓存
+tmp/
+.cache/

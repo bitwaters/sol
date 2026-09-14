@@ -1,0 +1,95 @@
+{
+  "chain": "sol",
+
+  "signal": {
+    "windowMinutes": 15,
+    "minDistinctWallets": 3,
+    "strongWallets": 5,
+    "requireOpenAction": true,
+    "requireAtLeastOneSmartMoney": true,
+    "cooldownMinutes": 30,
+    "clusterMerge": true
+  },
+
+  "tradeFilter": {
+    "sides": ["buy"],
+    "actions": ["open", "add"],
+    "minTradeAmountUsd": 300,
+    "netInflowUsd": { "min": 2000, "max": null },
+    "walletCount": { "max": null }
+  },
+
+  "signalValidation": {
+    "prePushRecheck": true,
+    "fastFlipMinutes": 3,
+    "fastFlipSellRatio": 0.5,
+    "dropFullyExitedWallets": true,
+    "minValidWallets": 3,
+    "minVerifiableWallets": 2,
+    "minConsensusHoldingRatio": 0.6,
+    "positionDustRatio": 0.01,
+    "signalTtlSeconds": 90,
+    "warnPriceAboveEntry": 1.5,
+    "blockPriceAboveEntry": 2.0,
+    "postPushExitAlert": {
+      "enabled": true,
+      "actions": ["close"],
+      "minWallets": 1
+    }
+  },
+
+  "tokenFilter": {
+    "ageMinutes": { "min": 5, "max": 360 },
+    "marketCapUsd": { "min": 15000, "max": 200000 },
+    "holderCount": { "min": 100, "max": null },
+    "liquidityUsd": { "min": 10000, "max": null },
+    "maxTop10HolderRate": 0.35,
+    "maxBundlerRate": 0.30,
+    "maxInsiderRate": 0.30,
+    "maxEntrapmentRate": 0.30,
+    "maxBotDegenRate": 0.30,
+    "maxSniperCount": 20,
+    "maxFreshWalletRate": 0.30,
+    "maxDevTeamHoldRate": 0.10,
+    "excludeHoneypot": true,
+    "requireRenouncedMint": true,
+    "requireRenouncedFreeze": true,
+    "requireSocial": false
+  },
+
+  "walletFilter": {
+    "excludeTags": ["scammer"],
+    "minWalletAgeDays": 7,
+    "minObservedBuys": 1,
+    "cluster": {
+      "sameFunder": true,
+      "creationTimeDeltaMinutes": 60,
+      "maxHops": 1,
+      "excludeFunderLabels": ["cex", "bridge", "service"]
+    }
+  },
+
+  "exitAlerts": {
+    "enabled": true,
+    "actions": ["close"],
+    "minWallets": 2
+  },
+
+  "polling": {
+    "smartmoney": { "intervalMs": 1500, "limit": 100 },
+    "kol": { "intervalMs": 3000, "limit": 100 },
+    "followWallet": { "intervalMs": 3000, "limit": 100 }
+  },
+
+  "push": {
+    "language": "zh",
+    "maxPerMinute": 10,
+    "editThrottleSec": 30,
+    "stopEditAfterMinutes": 30,
+    "links": ["gmgn", "photon", "trojan", "bullx"],
+    "buyButton": "photon",
+    "quietHours": { "start": "02:00", "end": "08:00", "minWallets": 5 }
+  },
+
+  "retention": { "tradesDays": 30 }
+}

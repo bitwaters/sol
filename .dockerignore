@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.env
+data/*.sqlite*
+data/archive
+docs
+test
+
+.env.*
+*.pem
+data/gmgn-api-keys
+data/debug

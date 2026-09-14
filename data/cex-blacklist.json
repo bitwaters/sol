@@ -1,0 +1,10 @@
+{
+  "note": "CEX / 跨链桥 / 已知服务地址黑名单：资金来源命中这些地址时不做钱包合并（见 DEVELOPMENT.md §7.2）。必须人工维护，宁可少合并，不可错合并。",
+  "entries": [
+    {
+      "address": "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9",
+      "label": "binance",
+      "type": "cex"
+    }
+  ]
+}
