@@ -11,5 +11,5 @@
 - 已知限制：
   - 上游 client 使用全局 `fetch`，不自带代理；本项目在启动时可通过 `undici` 的
     `setGlobalDispatcher(ProxyAgent)` 支持 HTTP(S) 代理（不支持 SOCKS）
-  - 上游自带 429 自动重试（默认最多等 5s）；本项目设置
-    `GMGN_RATE_LIMIT_AUTO_RETRY_MAX_WAIT_MS=0` 关闭它，由自有 Token Bucket + BanGate 统一处理
+  - 上游自带 429 自动重试；本项目构造客户端时明确传入
+    `autoRetryOnRateLimit: false`，由自有 Token Bucket + BanGate 统一处理
