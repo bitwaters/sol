@@ -1,3 +1,6 @@
+import { captureFeatures, fresh } from './features.js';
+import { saveLiveQuality, validPrice } from './quality.js';
+import { CACHE_TTL, getCachedToken } from '../enrich/token.js';
 import type { AppConfig } from '../config.js';
 import type { CexBlacklist } from '../enrich/wallet.js';
 import type { Logger } from '../logger.js';
@@ -11,6 +14,8 @@ export interface ControlDeps {
   logger: Logger;
   blacklist: CexBlacklist;
   now?: () => number;
+  configVersion?: string;
+  rulesVersion?: string;
   /** 采样间隔（秒），默认 15 分钟 */
   intervalSec?: number;
   /** 采样目标：窗口内恰好达到 2 票的 token */
@@ -75,19 +80,15 @@ export function sampleControls(deps: ControlDeps): number {
       )
       .get(row.token, windowStart) as { ok: number } | undefined;
     if (exists) continue;
-    const token = db.prepare('SELECT price FROM tokens WHERE address = ?').get(row.token) as
-      | { price: string | null }
-      | undefined;
-    insert.run(
-      row.token,
-      nowSec,
-      windowStart,
-      nowSec,
-      window.votes,
-      window.netInflowUsd.toNumber(),
-      token?.price ?? null,
-      JSON.stringify({ control: true, votes: window.votes }),
-    );
+    const token = getCachedToken(db, row.token);
+    const price = validPrice(token?.price) && fresh(token?.price_updated_at, nowSec, CACHE_TTL.price) ? token!.price : null;
+    const features = captureFeatures(db, config, deps.blacklist, row.token, nowSec, targetVotes);
+    db.transaction(() => {
+      const result = insert.run(row.token, nowSec, windowStart, nowSec, window.votes,
+        window.netInflowUsd.toNumber(), price, JSON.stringify({ control: true, ...features }));
+      saveLiveQuality(db, Number(result.lastInsertRowid), nowSec, price, price === null ? null : token!.price_updated_at,
+        features, deps.configVersion ?? null, deps.rulesVersion ?? null, nowSec);
+    })();
     created += 1;
   }
 

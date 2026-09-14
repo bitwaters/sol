@@ -53,6 +53,7 @@ export function resolveStaleGaps(
       setKv(db, `last_accepted_gap:${source}`, { from: health.gap_from_ts, to: resumeAt,
         acceptedAt: nowSec, recovered: false }, nowSec);
       setKv(db, `accepted_gap_count:${source}`, (getKv<number>(db, `accepted_gap_count:${source}`) ?? 0) + 1, nowSec);
+      db.prepare("UPDATE data_gaps SET state='accepted',closed_at=? WHERE source=? AND state='open'").run(nowSec, source);
       upsertSourceHealth(db, { source, watermark_ts: resumeAt, gap_from_ts: null,
         gap_to_ts: null, backfill_cursor: null }, nowSec);
     })();

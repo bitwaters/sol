@@ -1,5 +1,7 @@
 # M4 验收报告（回测与统计）
 
+> 本报告记录 M4 初次验收；2026-09-14 后的测量质量、调度与调参门槛以 [MEASUREMENT-QUALITY.md](MEASUREMENT-QUALITY.md) 为准。
+
 > 日期：2026-09-13 · 对照：`docs/TASKS.md` M4-1 ~ M4-6 与 `docs/DEVELOPMENT.md` §10
 
 ## 交付内容

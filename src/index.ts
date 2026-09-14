@@ -1,3 +1,4 @@
+import { repairBaselines } from './backtest/repair.js';
 import { EvaluationScheduler } from './signal/scheduler.js';
 import { runtimeMetrics } from './ops/metrics.js';
 import { evaluateOutcomes } from './backtest/evaluate.js';
@@ -180,15 +181,19 @@ async function main(): Promise<void> {
   shutdownHooks.push(() => clearInterval(metricsTimer));
 
   // M4/M5：数据评估、对照采样、退出监控、备份与候选维护（不依赖 Telegram）
-  const backtestTimer = setInterval(() => {
-    void evaluateOutcomes({
-      db,
-      config,
-      gateway,
-      logger: log.child({ module: 'backtest' }),
-      maxPerRun: 5,
-    }).catch((err: unknown) => log.error('回测失败', { error: err }));
-  }, 300_000);
+  const measurementGateway = gateway.background();
+  let measuring = false;
+  const runMeasurements = async (): Promise<void> => {
+    if (measuring) return;
+    measuring = true;
+    try {
+      await repairBaselines({ ...engineDeps, gateway: measurementGateway, maxPerRun: 4 });
+      await evaluateOutcomes({ db, config, gateway: measurementGateway,
+        logger: log.child({ module: 'backtest' }), maxPerRun: 4 });
+    } catch (err) { log.error('回测失败', { error: err }); }
+    finally { measuring = false; }
+  };
+  const backtestTimer = setInterval(() => { void runMeasurements(); }, 30_000);
   const controlTimer = setInterval(() => {
     try {
       sampleControls({
@@ -196,7 +201,10 @@ async function main(): Promise<void> {
         config,
         logger: log.child({ module: 'control' }),
         blacklist,
+        configVersion: loaded.configVersion,
+        rulesVersion: loaded.rulesVersion,
       });
+      void runMeasurements();
     } catch (err) {
       log.error('对照采样失败', { error: err });
     }
@@ -290,6 +298,8 @@ async function main(): Promise<void> {
       sender,
       chatId: env.TG_CHAT_ID,
       logger: log.child({ module: 'pusher' }),
+      configVersion: loaded.configVersion,
+      rulesVersion: loaded.rulesVersion,
       revalidate: (signalId) => revalidateSignalForSend(engineDeps, signalId),
     });
     pushTimer = setInterval(() => {

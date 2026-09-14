@@ -54,6 +54,10 @@ export function upsertSourceHealth(
     ).run(next);
     const gapKey = `gap_since:${patch.source}`;
     if (next.gap_from_ts !== null && next.gap_to_ts !== null) {
+      db.prepare(`INSERT INTO data_gaps(source,from_ts,to_ts,opened_at,state) VALUES (?,?,?,?,'open')
+        ON CONFLICT(source) WHERE state='open' DO UPDATE SET
+        from_ts=MIN(from_ts,excluded.from_ts),to_ts=MAX(to_ts,excluded.to_ts)`)
+        .run(patch.source, next.gap_from_ts, next.gap_to_ts, now);
       // 立即撤销所有在持仓周期的完整性，不能等候选评估才传播缺口。
       const affected = db.prepare("SELECT DISTINCT wallet, token FROM wallet_positions WHERE state IN ('open','unknown','incomplete')")
         .all() as Array<{ wallet: string; token: string }>;
@@ -67,6 +71,7 @@ export function upsertSourceHealth(
         setKv(db, gapKey, now, now);
       }
     } else {
+      db.prepare("UPDATE data_gaps SET state='recovered',closed_at=? WHERE source=? AND state='open'").run(now, patch.source);
       deleteKv(db, gapKey);
     }
   })();

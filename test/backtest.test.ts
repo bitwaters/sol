@@ -73,7 +73,7 @@ describe('M4-2 对照采样', () => {
       });
       upsertTrades(db, 'smartmoney', [trade!]);
     }
-    db.prepare("INSERT INTO tokens (address, price) VALUES ('CTRL', '0.5')").run();
+    db.prepare("INSERT INTO tokens (address, price, price_updated_at) VALUES ('CTRL', '0.5', ?)").run(nowSec);
 
     const created = sampleControls({
       db,
@@ -104,8 +104,8 @@ describe('M4-3 统计报告', () => {
   it('对照不足时明确"无法验证"，且不报告胜率', () => {
     const db = openDatabase({ path: ':memory:' });
     db.prepare(
-      `INSERT INTO signals (token, triggered_at, status, wallet_count, outcome_1h)
-       VALUES ('A', 1000, 'pushed', 4, 1.4)`,
+      `INSERT INTO signals (token, triggered_at, status, wallet_count, outcome_1h, price_at_send)
+       VALUES ('A', 1000, 'pushed', 4, 1.4, '1')`,
     ).run();
     const report = buildStatsReport(db, loaded.config);
     expect(report.text).toContain('对照样本不足，无法验证');

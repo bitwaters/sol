@@ -1,3 +1,5 @@
+import { qualityOverview, qualityReportLines } from './quality-report.js';
+import { compareSamples } from './compare.js';
 import { reasonLabel, sourceLabel } from '../telegram/labels.js';
 import type { AppConfig } from '../config.js';
 import type { Db } from '../store/db.js';
@@ -110,10 +112,13 @@ export function buildStatsReport(db: Db, config: AppConfig): StatsReport {
     (r) =>
       r.status === 'invalidated' || r.status === 'blocked_price' || r.status === 'expired',
   );
-  const evaluated = pushed.filter((r) => r.outcome_1h !== null).length;
-  const coverage = pushed.length > 0 ? evaluated / pushed.length : 0;
+  const pushedQuality = qualityOverview(db).find(group => group.group === 'pushed')!;
+  const matured = pushedQuality.cohorts.reduce((sum, cohort) => sum + cohort.horizons[1]!.mature, 0);
+  const evaluated = pushedQuality.cohorts.reduce((sum, cohort) => sum + cohort.horizons[1]!.valid, 0);
+  const coverage = matured > 0 ? evaluated / matured : 0;
 
-  const lines: string[] = [];
+  const lines: string[] = qualityReportLines(db);
+  lines.push('', '以下全量价格描述含不同数据版本，不用于验证参数。');
   lines.push('📈 信号表现（价格变化倍数，1.00x = 持平）');
   lines.push(
     `样本：已推送 ${pushed.length} · 对照 ${control.length} · 1小时 覆盖率 ${(coverage * 100).toFixed(0)}%`,
@@ -151,9 +156,9 @@ export function buildStatsReport(db: Db, config: AppConfig): StatsReport {
   lines.push('');
   lines.push(`对照组 1小时 中位数：${fmt(median(controlValues))}（${controlValues.length}）`);
 
-  const controlSufficient = controlValues.length >= CONTROL_MIN_SAMPLES;
+  const controlSufficient = controlValues.length >= CONTROL_MIN_SAMPLES && compareSamples(db).ready;
   if (!controlSufficient) {
-    lines.push('⚠️ 对照样本不足，无法验证阈值；不据此调整参数。');
+    lines.push('⚠️ 对照样本不足，无法验证阈值；或质量、覆盖率、独立代币及时间留出门槛未达标，不据此调整参数。');
   }
 
   // 被拦截候选：验证过滤是否错杀

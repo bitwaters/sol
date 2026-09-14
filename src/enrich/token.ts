@@ -52,6 +52,8 @@ export interface EnrichGateway {
 }
 
 export interface EnrichOptions {
+  /** Measurement reads do not overwrite caches concurrently refreshed by live evaluation. */
+  persist?: boolean;
   now?: () => number;
   logger?: Logger;
   /** 强制刷新（忽略 TTL） */
@@ -186,7 +188,7 @@ export function parseTokenSecurity(raw: unknown): ParsedTokenSecurity {
   };
 }
 
-function rowToSnapshot(row: TokenRow): TokenSnapshot {
+export function rowToSnapshot(row: TokenRow): TokenSnapshot {
   return {
     address: row.address,
     symbol: row.symbol,
@@ -422,6 +424,6 @@ export async function enrichToken(
 
   snapshot.enrichedAt = now;
   snapshot.missing = computeMissing(snapshot);
-  upsertToken(db, snapshot);
+  if (options.persist !== false) upsertToken(db, snapshot);
   return snapshot;
 }

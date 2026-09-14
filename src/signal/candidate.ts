@@ -1,3 +1,5 @@
+import { captureFeatures, fresh } from '../backtest/features.js';
+import { saveLiveQuality, validPrice } from '../backtest/quality.js';
 import { measureAsync } from '../ops/metrics.js';
 import { Decimal } from 'decimal.js';
 import { boundHoldingRatio } from './members.js';
@@ -587,7 +589,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
       inputSnapshot,
       result,
       reason,
-    });
+    }, now);
   };
 
   // 原始买入钱包数是有效票数的上界；尚未形成候选时先做本地筛选，
@@ -751,6 +753,12 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
         tokenSnapshot.price,
       );
     signalId = Number(res.lastInsertRowid);
+    const features = captureFeatures(db, config, deps.blacklist, token, now);
+    const measuredPrice = validPrice(tokenSnapshot.price) && fresh(tokenSnapshot.priceUpdatedAt, now, 60)
+      ? tokenSnapshot.price : null;
+    // Preserve the trading row; uncertified legacy/stale baselines are excluded from calibration.
+    if (measuredPrice === tokenSnapshot.price) saveLiveQuality(db, signalId, now, measuredPrice,
+      tokenSnapshot.priceUpdatedAt, features, deps.configVersion, deps.rulesVersion, now);
   }
 
   // 钱包层

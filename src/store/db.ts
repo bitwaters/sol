@@ -30,6 +30,22 @@ export function applySchema(db: Db): void {
         if (!existing.has(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
       }
     }
+    // Idempotent provenance start; older history cannot be declared gap-free.
+    const started = getKv<number>(db, 'quality_tracking_started_at');
+    if (started === null) {
+      const now = Math.floor(Date.now() / 1000);
+      setKv(db, 'quality_tracking_started_at', now, now);
+      for (const source of ['smartmoney', 'kol', 'follow']) {
+        const gap = getKv<{ from: number; to: number; acceptedAt: number }>(db, `last_accepted_gap:${source}`);
+        if (gap && Number.isFinite(gap.from) && Number.isFinite(gap.to)) {
+          db.prepare("INSERT INTO data_gaps(source,from_ts,to_ts,opened_at,closed_at,state) VALUES (?,?,?,?,?,'accepted')")
+            .run(source, gap.from, gap.to, gap.acceptedAt, gap.acceptedAt);
+        }
+      }
+    }
+    db.prepare(`INSERT OR IGNORE INTO data_gaps(source,from_ts,to_ts,opened_at,state)
+      SELECT source,gap_from_ts,gap_to_ts,COALESCE(updated_at,unixepoch()),'open'
+      FROM source_health WHERE gap_from_ts IS NOT NULL AND gap_to_ts IS NOT NULL`).run();
   })();
 }
 

@@ -18,6 +18,10 @@ export const ROUTE_WEIGHTS = {
   kline: 2,
 } as const;
 
+export class BackgroundBusyError extends Error {
+  constructor() { super('background budget unavailable'); this.name = 'BackgroundBusyError'; }
+}
+
 export type RouteName = keyof typeof ROUTE_WEIGHTS;
 
 /** 429 / 封禁错误：由调用方决定退避与回补，封禁期内不得重试 */
@@ -69,6 +73,8 @@ export class GmgnGateway {
   private readonly banGate: BanGate;
   private readonly logger?: Logger;
   private readonly now: () => number;
+  private backgroundNextAt = 0;
+  private backgroundInFlight = false;
 
   constructor(options: GmgnGatewayOptions) {
     this.client = options.client;
@@ -87,13 +93,32 @@ export class GmgnGateway {
   }
 
   /** 调用前：封禁门 → 权重获取 → 再查封禁门（等待期间可能新增封禁）→ 执行 */
-  async call<T>(route: RouteName, fn: (client: OpenApiClient) => Promise<T>): Promise<T> {
+  async call<T>(route: RouteName, fn: (client: OpenApiClient) => Promise<T>, background = false): Promise<T> {
     const queuedAt = performance.now();
-    // 排队期间可能新增封禁；过期的额度不能攒到解禁后集中释放。
-    while (true) {
-      await this.banGate.waitIfBanned();
-      await this.limiter.acquire(ROUTE_WEIGHTS[route]);
-      if (!this.banGate.isBanned) break;
+    if (background) {
+      if (this.backgroundInFlight) throw new BackgroundBusyError();
+      this.backgroundInFlight = true;
+      const deadline = performance.now() + 5000;
+      while (true) {
+        if (this.banGate.isBanned || performance.now() >= deadline) {
+          this.backgroundInFlight = false;
+          throw new BackgroundBusyError();
+        }
+        // Leave three units for the follow feed; never jump ahead of queued foreground work.
+        if (this.now() >= this.backgroundNextAt && this.limiter.available >= ROUTE_WEIGHTS[route] + 3
+          && this.limiter.tryAcquire(ROUTE_WEIGHTS[route])) {
+          this.backgroundNextAt = this.now() + ROUTE_WEIGHTS[route] * 1000;
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+    } else {
+      // 排队期间可能新增封禁；过期的额度不能攒到解禁后集中释放。
+      while (true) {
+        await this.banGate.waitIfBanned();
+        await this.limiter.acquire(ROUTE_WEIGHTS[route]);
+        if (!this.banGate.isBanned) break;
+      }
     }
     const requestedAt = performance.now();
     runtimeMetrics.observe(`gmgn.queue.${route}`, requestedAt - queuedAt);
@@ -119,8 +144,19 @@ export class GmgnGateway {
       }
       throw err;
     } finally {
+      if (background) this.backgroundInFlight = false;
       runtimeMetrics.observe(`gmgn.request.${route}.${outcome}`, performance.now() - requestedAt);
     }
+  }
+
+  /** Low-priority measurement traffic shares the global ban and budget. */
+  background() {
+    return {
+      fetchTokenInfo: (address: string) => this.call('tokenInfo', c => c.getTokenInfo('sol', address), true),
+      fetchTokenSecurity: (address: string) => this.call('tokenSecurity', c => c.getTokenSecurity('sol', address), true),
+      fetchKline: (address: string, resolution: string, from: number, to: number) =>
+        this.call('kline', c => c.getTokenKline('sol', address, resolution, from, to), true),
+    };
   }
 
   // ---- 业务便捷方法（M1-9/M1-12/M1-13 使用） ----

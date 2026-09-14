@@ -1,3 +1,5 @@
+import { captureFeatures, fresh } from '../backtest/features.js';
+import { saveLiveQuality, validPrice } from '../backtest/quality.js';
 import { measureAsync, runtimeMetrics } from '../ops/metrics.js';
 import { measureTelegram } from './telemetry.js';
 import { TelegramDeliveryUnknownError } from './types.js';
@@ -20,6 +22,8 @@ import { TelegramRateLimitError, type TelegramApi } from './types.js';
 
 export interface PusherDeps {
   blacklist?: CexBlacklist;
+  configVersion?: string;
+  rulesVersion?: string;
   db: Db;
   config: AppConfig;
   sender: TelegramApi;
@@ -489,6 +493,7 @@ export class Pusher {
         });
 
         if (task.kind === 'signal') {
+          const measurement = captureFeatures(db, config, this.deps.blacklist ?? { entries: new Map() }, view.token, nowSec);
           const sent = await sender.sendMessage(chatId, text, {
             parse_mode: 'HTML',
             reply_markup: keyboard,
@@ -508,7 +513,16 @@ export class Pusher {
               warn: view.priceRatio !== null && view.priceRatio > config.signalValidation.warnPriceAboveEntry,
               tokenMetrics: { createdAt: view.tokenAgeMinutes === null ? null : nowSec - view.tokenAgeMinutes * 60, marketCap: view.marketCap },
             }), task.signal_id);
+            db.prepare('DELETE FROM sample_quality WHERE signal_id=?').run(task.signal_id);
+            db.prepare('DELETE FROM outcome_quality WHERE signal_id=?').run(task.signal_id);
+            const quoteTs = measurement.tokenMetrics?.priceUpdatedAt ?? null;
+            if (validPrice(view.currentPrice) && fresh(quoteTs, nowSec, 60)
+              && Number(measurement.tokenMetrics?.price) === Number(view.currentPrice)) {
+              saveLiveQuality(db, task.signal_id, nowSec, String(view.currentPrice), quoteTs, measurement,
+                this.deps.configVersion ?? null, this.deps.rulesVersion ?? null, nowSec);
+            }
             for (const field of ['outcome_5m','outcome_1h','outcome_24h']) {
+              db.prepare('DELETE FROM kv WHERE key=?').run(`backtest_next_retry:${task.signal_id}:${field}`);
               db.prepare('DELETE FROM kv WHERE key IN (?,?)').run(`backtest_attempts:${task.signal_id}:${field}`, `backtest_giveup:${task.signal_id}:${field}`);
             }
 

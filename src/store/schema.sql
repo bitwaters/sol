@@ -214,3 +214,56 @@ CREATE TABLE IF NOT EXISTS signal_evaluations (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_evaluations_signal ON signal_evaluations(signal_id, evaluated_at);
+
+-- Measurement quality is separate from trading state; legacy rows stay explicitly unknown.
+CREATE TABLE IF NOT EXISTS sample_quality (
+  signal_id INTEGER PRIMARY KEY REFERENCES signals(id) ON DELETE CASCADE,
+  anchor_ts INTEGER NOT NULL,
+  anchor_price TEXT,
+  selection_ts INTEGER NOT NULL,
+  price_ts INTEGER,
+  captured_at INTEGER NOT NULL,
+  method TEXT NOT NULL CHECK(method IN ('live','historical','legacy','pending')),
+  state TEXT NOT NULL CHECK(state IN ('ready','pending','exhausted')),
+  config_version TEXT,
+  rules_version TEXT,
+  features TEXT,
+  initial_features TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_retry_at INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_quality_retry ON sample_quality(state, next_retry_at);
+CREATE TABLE IF NOT EXISTS baseline_repairs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  signal_id INTEGER NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+  repaired_at INTEGER NOT NULL,
+  old_anchor_ts INTEGER NOT NULL,
+  new_anchor_ts INTEGER NOT NULL,
+  price TEXT NOT NULL,
+  price_ts INTEGER NOT NULL,
+  method TEXT NOT NULL,
+  deviation_sec INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS outcome_quality (
+  signal_id INTEGER NOT NULL REFERENCES signals(id) ON DELETE CASCADE,
+  horizon TEXT NOT NULL,
+  anchor_ts INTEGER NOT NULL,
+  anchor_price TEXT NOT NULL,
+  target_ts INTEGER NOT NULL,
+  candle_close_ts INTEGER,
+  recorded_at INTEGER NOT NULL,
+  state TEXT NOT NULL,
+  PRIMARY KEY(signal_id, horizon)
+);
+CREATE TABLE IF NOT EXISTS data_gaps (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  from_ts INTEGER NOT NULL,
+  to_ts INTEGER NOT NULL,
+  opened_at INTEGER NOT NULL,
+  closed_at INTEGER,
+  state TEXT NOT NULL CHECK(state IN ('open','recovered','accepted'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gap_open ON data_gaps(source) WHERE state='open';
+CREATE INDEX IF NOT EXISTS idx_gap_interval ON data_gaps(from_ts,to_ts);

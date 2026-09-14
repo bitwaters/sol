@@ -1,7 +1,9 @@
+import { BackgroundBusyError } from '../ingest/gateway.js';
+import { syncQuality } from './quality.js';
 import { Decimal } from 'decimal.js';
 import type { AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
-import { getKv, setKv, type Db } from '../store/db.js';
+import { deleteKv, getKv, setKv, type Db } from '../store/db.js';
 
 export interface KlineGateway {
   fetchKline(address: string, resolution: string, fromMs: number, toMs: number): Promise<unknown>;
@@ -47,26 +49,26 @@ const TARGETS = [
   { field: 'outcome_24h', offsetSec: 86_400, resolution: '1h', resolutionMs: 3_600_000, toleranceMs: 60 * 60_000 },
 ] as const;
 
-function asCandles(raw: unknown): Candle[] {
+export function asCandles(raw: unknown): Candle[] {
   const list =
     raw && typeof raw === 'object' && Array.isArray((raw as Record<string, unknown>)['list'])
       ? ((raw as Record<string, unknown>)['list'] as Record<string, unknown>[])
       : [];
   return list
-    .filter((item) => item && typeof item === 'object' && item['close'] !== null && item['close'] !== '')
+    .filter((item) => item && typeof item === 'object' && ['close','time'].every(key =>
+      typeof item[key] === 'number' || (typeof item[key] === 'string' && item[key].trim() !== '')))
     .map((item) => ({
       timeMs: Number(item['time']),
       close: Number(item['close']),
     }))
-    .filter((c) => Number.isFinite(c.timeMs) && Number.isFinite(c.close) && c.close >= 0)
+    .filter((c) => Number.isFinite(c.timeMs) && c.timeMs >= 0 && Number.isFinite(c.close) && c.close >= 0)
     .sort((a, b) => a.timeMs - b.timeMs);
 }
 
 /** 记录缺行情次数；连续 3 次放弃该期限（终止状态） */
-function recordMissing(db: Db, signalId: number, field: string): void {
+function recordMissing(db: Db, signalId: number, field: string, nowSec: number): void {
   const key = `backtest_attempts:${signalId}:${field}`;
   const attempts = (getKv<number>(db, key) ?? 0) + 1;
-  const nowSec = Math.floor(Date.now() / 1000);
   setKv(db, key, attempts, nowSec);
   if (attempts >= 3) {
     setKv(db, `backtest_giveup:${signalId}:${field}`, true, nowSec);
@@ -109,6 +111,8 @@ async function runEvaluation(deps: BacktestDeps): Promise<BacktestResult> {
   const { db, gateway, logger } = deps;
   const nowSec = Math.floor((deps.now?.() ?? Date.now()) / 1000);
   const maxPerRun = deps.maxPerRun ?? 10;
+  if (maxPerRun <= 0) return { evaluated: 0, missingSamples: 0, skipped: 0 };
+  syncQuality(db, nowSec);
   const result: BacktestResult = { evaluated: 0, missingSamples: 0, skipped: 0 };
 
   // 分页扫描全部到期样本后排序，避免较新样本的短期评估被旧样本挤出额度。
@@ -133,6 +137,7 @@ async function runEvaluation(deps: BacktestDeps): Promise<BacktestResult> {
       const baseTs = signal.sent_at ?? signal.triggered_at;
       const targets = TARGETS.filter((target) => {
         if (signal[target.field] !== null) return false;
+        if ((getKv<number>(db, `backtest_next_retry:${signal.id}:${target.field}`) ?? 0) > nowSec) return false;
         if (baseTs + target.offsetSec > nowSec) return false;
         if (getKv<boolean>(db, `backtest_giveup:${signal.id}:${target.field}`) === true) return false;
         return true;
@@ -140,10 +145,8 @@ async function runEvaluation(deps: BacktestDeps): Promise<BacktestResult> {
       if (targets.length === 0) continue;
       const baseline = Number(signal.price_at_send ?? signal.price_at_trigger);
       if (!Number.isFinite(baseline) || baseline <= 0) {
-        // 缺基准价格：逐期限标记终止，避免堵塞队列
-        for (const target of targets) {
-          setKv(db, `backtest_giveup:${signal.id}:${target.field}`, true, nowSec);
-        }
+        // Pending baseline repair is recoverable and does not consume market retries.
+        result.skipped += 1;
         continue;
       }
       due.push({ signal, baseTs, targets });
@@ -164,7 +167,6 @@ async function runEvaluation(deps: BacktestDeps): Promise<BacktestResult> {
       continue;
     }
     const basePrice = new Decimal(basePriceRaw);
-    const updates: Record<string, number | null> = {};
     let evaluatedAny = false;
     let missing = 0;
 
@@ -189,26 +191,45 @@ async function runEvaluation(deps: BacktestDeps): Promise<BacktestResult> {
           target.toleranceMs,
         );
         if (candle === null) {
-          recordMissing(db, signal.id, target.field);
+          recordMissing(db, signal.id, target.field, nowSec);
+          setKv(db, `backtest_next_retry:${signal.id}:${target.field}`, nowSec + 300, nowSec);
+          db.prepare(`INSERT OR REPLACE INTO outcome_quality
+            (signal_id,horizon,anchor_ts,anchor_price,target_ts,recorded_at,state) VALUES (?,?,?,?,?,?,?)`)
+            .run(signal.id, target.field, baseTs, basePriceRaw, targetSec, nowSec,
+              getKv(db, `backtest_giveup:${signal.id}:${target.field}`) === true ? 'exhausted' : 'no_market');
           missing += 1;
           continue;
         }
-        updates[target.field] = new Decimal(candle.close).div(basePrice).toNumber();
+        const ratio = new Decimal(candle.close).div(basePrice).toNumber();
+        if (!Number.isFinite(ratio)) throw new Error('nonfinite outcome');
+        db.transaction(() => {
+          db.prepare(`UPDATE signals SET ${target.field}=? WHERE id=?`).run(ratio, signal.id);
+          db.prepare(`INSERT OR REPLACE INTO outcome_quality
+            (signal_id,horizon,anchor_ts,anchor_price,target_ts,candle_close_ts,recorded_at,state)
+            VALUES (?,?,?,?,?,?,?,'complete')`).run(signal.id, target.field, baseTs, basePriceRaw,
+              targetSec, (candle.timeMs + target.resolutionMs) / 1000, nowSec);
+          deleteKv(db, `backtest_next_retry:${signal.id}:${target.field}`);
+        })();
         evaluatedAny = true;
       } catch (err) {
+        if (err instanceof BackgroundBusyError) {
+          if (evaluatedAny) result.evaluated += 1;
+          result.missingSamples += missing;
+          return result;
+        }
         logger.warn('回测取价失败', { signalId: signal.id, resolution: target.resolution, error: err });
+        const current = db.prepare(`SELECT 1 FROM signals WHERE id=? AND COALESCE(sent_at,triggered_at)=?
+          AND COALESCE(price_at_send,price_at_trigger)=?`).get(signal.id, baseTs, basePriceRaw);
+        if (!current) break;
+        setKv(db, `backtest_next_retry:${signal.id}:${target.field}`, nowSec + 300, nowSec);
+        db.prepare(`INSERT OR REPLACE INTO outcome_quality
+          (signal_id,horizon,anchor_ts,anchor_price,target_ts,recorded_at,state) VALUES (?,?,?,?,?,?,'request_error')`)
+          .run(signal.id, target.field, baseTs, basePriceRaw, targetSec, nowSec);
         // 请求错误不等同于缺行情，网络/限频恢复后仍可补齐。
         missing += 1;
       }
     }
 
-    if (Object.keys(updates).length > 0) {
-      const sets = Object.keys(updates)
-        .map((k) => `${k} = @${k}`)
-        .join(', ');
-      db.prepare(`UPDATE signals SET ${sets} WHERE id = @id
-        AND COALESCE(sent_at,triggered_at) = @baseTs AND COALESCE(price_at_send,price_at_trigger) = @basePrice`).run({ ...updates, id: signal.id, baseTs, basePrice: basePriceRaw });
-    }
     if (evaluatedAny) result.evaluated += 1;
     result.missingSamples += missing;
   }
