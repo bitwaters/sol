@@ -107,8 +107,8 @@ const configSchema = z
       maxPerMinute: z.number().int().positive(),
       editThrottleSec: z.number().int().nonnegative(),
       stopEditAfterMinutes: z.number().int().nonnegative(),
-      links: z.array(z.string()).min(1),
-      buyButton: z.string(),
+      links: z.array(z.literal('gmgn')).length(1),
+      buyButton: z.literal('gmgn'),
       quietHours: z.strictObject({
         start: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
         end: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),

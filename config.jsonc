@@ -86,8 +86,8 @@
     "maxPerMinute": 10,
     "editThrottleSec": 30,
     "stopEditAfterMinutes": 30,
-    "links": ["gmgn", "photon", "trojan", "bullx"],
-    "buyButton": "photon",
+    "links": ["gmgn"],
+    "buyButton": "gmgn",
     "quietHours": { "start": "02:00", "end": "08:00", "minWallets": 5 }
   },
 

@@ -134,12 +134,9 @@ function buildLinks(token: string, links: string[]): string {
   token = encodeURIComponent(token);
   const urls: Record<string, string> = {
     gmgn: `https://gmgn.ai/sol/token/${token}`,
-    photon: `https://photon-sol.tinyastro.io/en/lp/${token}`,
-    // Official entry point. A token deeplink requires a verified referral-code contract.
-    trojan: 'https://t.me/solana_trojanbot',
-    bullx: `https://bullx.io/terminal?chainId=1399811149&address=${token}`,
   };
   return links
+    .filter((name) => name === 'gmgn')
     .map((name) => {
       const url = urls[name];
       return url ? `<a href="${url}">${name.toUpperCase()}</a>` : name.toUpperCase();
@@ -149,22 +146,12 @@ function buildLinks(token: string, links: string[]): string {
 
 export function buildKeyboard(
   token: string,
-  options: FormatOptions,
+  _options: FormatOptions,
 ): { inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>> } {
-  const encodedToken = encodeURIComponent(token);
-  const urls: Record<string, string> = {
-    gmgn: `https://gmgn.ai/sol/token/${encodedToken}`,
-    photon: `https://photon-sol.tinyastro.io/en/lp/${encodedToken}`,
-    trojan: 'https://t.me/solana_trojanbot',
-    bullx: `https://bullx.io/terminal?chainId=1399811149&address=${encodedToken}`,
-  };
-  const buyUrl = urls[options.buyButton] ?? urls['gmgn']!;
+  const url = `https://gmgn.ai/sol/token/${encodeURIComponent(token)}`;
   return {
     inline_keyboard: [
-      [
-        { text: '📈 图表', url: urls['gmgn']! },
-        { text: options.buyButton === 'trojan' ? '⚡ 打开交易机器人' : '⚡ 打开交易页', url: buyUrl },
-      ],
+      [{ text: '📈 打开 GMGN', url }],
       [
         { text: '🔁 刷新', callback_data: `refresh:${token}` },
         { text: '🔕 屏蔽该币', callback_data: `mute:${token}` },

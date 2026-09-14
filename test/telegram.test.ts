@@ -128,6 +128,8 @@ describe('M3-3 消息模板', () => {
     expect(text).toContain('部分持仓未经余额核验');
     expect(text).toContain('非投资建议');
     expect(text).not.toContain('wallet-secret');
+    expect(text).toContain('https://gmgn.ai/sol/token/CA-ADDRESS-XYZ');
+    expect(text).not.toContain('photon');
   });
 });
 

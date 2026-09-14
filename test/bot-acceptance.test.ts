@@ -7,9 +7,11 @@ import { getKv, openDatabase } from '../src/store/db.js';
 import { config, log } from './review-fixture.js';
 import { buildKeyboard } from '../src/telegram/format.js';
 
-it('the trading link uses the official Trojan bot without an invented token-start contract', () => {
-  const keyboard = buildKeyboard('SYNTHETIC', { links: ['trojan'], buyButton: 'trojan' });
-  expect(keyboard.inline_keyboard[0]?.[1]).toEqual({ text: '⚡ 打开交易机器人', url: 'https://t.me/solana_trojanbot' });
+it('only GMGN is linked, even when a caller passes legacy platform options', () => {
+  const keyboard = buildKeyboard('SYNTHETIC/?', { links: ['trojan', 'photon'], buyButton: 'trojan' });
+  const links = keyboard.inline_keyboard.flat().filter(button => button.url);
+  expect(links).toEqual([{ text: '📈 打开 GMGN', url: 'https://gmgn.ai/sol/token/SYNTHETIC%2F%3F' }]);
+  expect(keyboard.inline_keyboard.flat().filter(button => button.callback_data)).toHaveLength(2);
 });
 
 it('admin commands and callback mutations use the same authorization middleware', async () => {
