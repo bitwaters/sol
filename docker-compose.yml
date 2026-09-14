@@ -3,11 +3,11 @@ services:
     build: .
     restart: unless-stopped
     env_file:
-      - .env
+      - ${SOL_ENV_FILE:-.env}
     environment:
       - TZ=UTC
     volumes:
-      - ./data:/app/data
+      - ${SOL_DATA_DIR:-./data}:/app/data
     logging:
       driver: json-file
       options:
