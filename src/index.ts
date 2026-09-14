@@ -19,7 +19,7 @@ import type { NormalizedTrade } from './ingest/normalize.js';
 import { createLogger } from './logger.js';
 import { evaluateToken, revalidateSignalForSend, runCandidateMaintenance } from './signal/candidate.js';
 import { applyIngestedTrades } from './signal/ingest.js';
-import { createBot, grammySender } from './telegram/bot.js';
+import { createBot, grammySender, registerBotCommands } from './telegram/bot.js';
 import { runExitMonitor } from './telegram/exit-monitor.js';
 import { Pusher } from './telegram/pusher.js';
 import { getKv, openDatabase, setKv, type Db } from './store/db.js';
@@ -332,7 +332,15 @@ async function main(): Promise<void> {
       shutdownHooks.push(() => clearInterval(opsTimer));
     }
 
-    void bot.start({ onStart: () => log.info('Telegram bot 已启动') }).catch((err: unknown) => {
+    void bot.start({ onStart: async () => {
+      log.info('Telegram bot 已启动');
+      try {
+        await registerBotCommands(bot);
+        log.info('Telegram 指令菜单已更新');
+      } catch {
+        log.error('Telegram 指令菜单更新失败，仍可输入 /help 使用指令');
+      }
+    } }).catch((err: unknown) => {
       log.error('Telegram bot 启动失败', { error: err });
     });
   } else {

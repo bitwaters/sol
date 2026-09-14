@@ -31,6 +31,8 @@ describe('M5-2 运维告警', () => {
       gatewayBannedUntilMs: (nowSec + 60) * 1000,
     });
     const kinds = alerts.map((a) => a.kind);
+    expect(alerts.map(a => a.message).join('\n')).not.toMatch(/poller|smartmoney|push_tasks|unknown/);
+    expect(alerts.map(a => a.message).join('\n')).toContain('UTC');
     expect(kinds).toContain('heartbeat:smartmoney');
     expect(kinds).toContain('gap:kol');
     expect(kinds).toContain('push_unknown');

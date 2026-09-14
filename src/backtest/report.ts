@@ -1,3 +1,4 @@
+import { reasonLabel, sourceLabel } from '../telegram/labels.js';
 import type { AppConfig } from '../config.js';
 import type { Db } from '../store/db.js';
 import type { TelegramApi } from '../telegram/types.js';
@@ -115,11 +116,11 @@ export function buildStatsReport(db: Db, config: AppConfig): StatsReport {
   const lines: string[] = [];
   lines.push('📈 信号表现（价格变化倍数，1.00x = 持平）');
   lines.push(
-    `样本：已推送 ${pushed.length} · 对照 ${control.length} · 1h 覆盖率 ${(coverage * 100).toFixed(0)}%`,
+    `样本：已推送 ${pushed.length} · 对照 ${control.length} · 1小时 覆盖率 ${(coverage * 100).toFixed(0)}%`,
   );
   lines.push('');
   lines.push(
-    `全量 5m/1h/24h 中位数：${fmt(median(pushed.map((r) => r.outcome_5m).filter((v): v is number => v !== null)))} / ${fmt(
+    `全量 5分钟/1小时/24小时 中位数：${fmt(median(pushed.map((r) => r.outcome_5m).filter((v): v is number => v !== null)))} / ${fmt(
       median(pushed.map((r) => r.outcome_1h).filter((v): v is number => v !== null)),
     )} / ${fmt(median(pushed.map((r) => r.outcome_24h).filter((v): v is number => v !== null)))}`,
   );
@@ -129,16 +130,15 @@ export function buildStatsReport(db: Db, config: AppConfig): StatsReport {
     ['票数 ≥5', (r) => (r.votes_snapshot ?? 0) >= 5],
     ['追高警告', (r) => r.warn_snapshot === true || (r.warn_snapshot === null && r.price_ratio !== null && r.price_ratio > config.signalValidation.warnPriceAboveEntry)],
     ['无警告', (r) => r.warn_snapshot === false || (r.warn_snapshot === null && r.price_ratio !== null && r.price_ratio <= config.signalValidation.warnPriceAboveEntry)],
-    ['代币 <1h', (r) => r.age_minutes !== null && r.age_minutes < 60],
-    ['市值 <50K', (r) => r.market_cap !== null && r.market_cap < 50_000],
-    ['市值 ≥50K', (r) => r.market_cap !== null && r.market_cap >= 50_000],
+    ['代币年龄 <1小时', (r) => r.age_minutes !== null && r.age_minutes < 60],
+    ['市值 <5万美元', (r) => r.market_cap !== null && r.market_cap < 50_000],
+    ['市值 ≥5万美元', (r) => r.market_cap !== null && r.market_cap >= 50_000],
   ];
-  const sourceLabels: Record<string, string> = { smartmoney: 'Smart Money', kol: 'KOL', follow: '自选' };
   for (const key of [...new Set(pushed.map(row => row.sources.join(',')))].filter(Boolean).sort()) {
-    groups.push([`来源 ${key.split(',').map(source => sourceLabels[source] ?? source).join('＋')}`, row => row.sources.join(',') === key]);
+    groups.push([`来源 ${key.split(',').map(source => sourceLabel(source)).join('＋')}`, row => row.sources.join(',') === key]);
   }
   lines.push('');
-  lines.push('分组 1h 中位数（样本数）：');
+  lines.push('分组 1小时 中位数（样本数）：');
   for (const [label, predicate] of groups) {
     const subset = pushed.filter(predicate);
     const values = subset.map((r) => r.outcome_1h).filter((v): v is number => v !== null);
@@ -149,20 +149,20 @@ export function buildStatsReport(db: Db, config: AppConfig): StatsReport {
     .map((r) => r.outcome_1h)
     .filter((v): v is number => v !== null);
   lines.push('');
-  lines.push(`对照组 1h 中位数：${fmt(median(controlValues))}（${controlValues.length}）`);
+  lines.push(`对照组 1小时 中位数：${fmt(median(controlValues))}（${controlValues.length}）`);
 
   const controlSufficient = controlValues.length >= CONTROL_MIN_SAMPLES;
   if (!controlSufficient) {
-    lines.push('⚠️ 对照样本不足，无法验证阈值（§8 待验证假设）；不据此调整参数。');
+    lines.push('⚠️ 对照样本不足，无法验证阈值；不据此调整参数。');
   }
 
   // 被拦截候选：验证过滤是否错杀
   if (intercepted.length > 0) {
     lines.push('');
-    lines.push(`未推送候选 1h 中位数（共 ${intercepted.length}）：`);
+    lines.push(`未推送候选 1小时 中位数（共 ${intercepted.length}）：`);
     const byReason = new Map<string, OutcomeRow[]>();
     for (const row of intercepted) {
-      const reason = row.reason ?? 'unknown';
+      const reason = reasonLabel(row.reason);
       const list = byReason.get(reason) ?? [];
       list.push(row);
       byReason.set(reason, list);
@@ -172,7 +172,7 @@ export function buildStatsReport(db: Db, config: AppConfig): StatsReport {
       lines.push(`· ${reason}：${fmt(median(values))}（${values.length}/${list.length}）`);
     }
   }
-  lines.push('ℹ️ 未含成本模型（手续费/滑点/gas）前不报告策略胜率。');
+  lines.push('ℹ️ 未含成本模型（手续费/滑点/网络费用）前不报告策略胜率。');
 
   return {
     text: lines.join('\n'),

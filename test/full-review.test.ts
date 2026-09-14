@@ -303,7 +303,7 @@ it('发送快照的警告分组互斥，不受随后修改阈值影响', () => {
 it('长统计报告按消息上限分段，完整保留内容与表情', async () => {
   const d = db();
   const insert = d.prepare("INSERT INTO signals(token,status,triggered_at,reason) VALUES ('T','invalidated',?,?)");
-  for (let i = 0; i < 180; i++) insert.run(baseNow, `reason_${i}_${'🧪'.repeat(20)}`);
+  for (let i = 0; i < 180; i++) insert.run(baseNow, `votes_below_min(${i})`);
   const send = sender(); const texts: string[] = [];
   const report = await sendDailyReport({ db: d, config, chatId: 'test', sender: { ...send, sendMessage: async (_chat, text) => { texts.push(text); return { message_id: 1 }; } } });
   expect(texts.length).toBeGreaterThan(1);
@@ -373,7 +373,7 @@ it('来源分组固定使用发送快照，后续成员变更不污染分组', (
   const d = db();
   d.prepare("INSERT INTO signals(token,status,triggered_at,outcome_1h,send_snapshot) VALUES ('T','pushed',?,2,?)")
     .run(baseNow, JSON.stringify({ sources: ['smartmoney','kol'], votes: 3 }));
-  expect(buildStatsReport(d, config).text).toContain('来源 KOL＋Smart Money：2.00x（1）');
+  expect(buildStatsReport(d, config).text).toContain('来源 意见领袖＋聪明钱：2.00x（1）');
 });
 
 it('同票数成员替换也触发升级，成员版本独立于价格修订', async () => {

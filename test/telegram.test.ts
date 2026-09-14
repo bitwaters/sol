@@ -130,6 +130,8 @@ describe('M3-3 消息模板', () => {
     expect(text).not.toContain('wallet-secret');
     expect(text).toContain('https://gmgn.ai/sol/token/CA-ADDRESS-XYZ');
     expect(text).not.toContain('photon');
+    expect(text).not.toMatch(/creator_close|Top10|Bundler|Insider|Dev/);
+    expect(text).toContain('开发者持仓 已清仓');
   });
 });
 

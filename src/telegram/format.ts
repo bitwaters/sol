@@ -1,3 +1,4 @@
+import { developerStatus } from './labels.js';
 import { Decimal } from 'decimal.js';
 
 export interface FormatWallet {
@@ -72,9 +73,9 @@ function categoryOf(wallet: FormatWallet): { label: string; emoji: string } {
   const hasKol = wallet.sources.includes('kol') || wallet.tags.includes('renowned');
   const hasFollow = wallet.sources.includes('follow');
   const parts: string[] = [];
-  if (hasSmart) parts.push('Smart Money');
-  if (hasKol) parts.push('KOL');
-  if (hasFollow) parts.push('自选');
+  if (hasSmart) parts.push('聪明钱');
+  if (hasKol) parts.push('意见领袖');
+  if (hasFollow) parts.push('关注钱包');
   if (parts.length === 0) parts.push('其他');
   const emoji = [hasSmart ? SOURCE_EMOJI.smartmoney : '', hasKol ? SOURCE_EMOJI.kol : '', hasFollow ? SOURCE_EMOJI.follow : '']
     .filter(Boolean)
@@ -193,12 +194,12 @@ export function formatSignalMessage(view: SignalView, options: FormatOptions): s
   lines.push(`📊 持仓保留 ${pct(view.retentionRatio)} · ${priceLine}`);
   if (view.partialHoldings) lines.push('ℹ️ 部分持仓未经余额核验');
   lines.push(
-    `🛡 Top10 ${pct(view.top10Rate)} · Bundler ${pct(view.bundlerRate)} · Insider ${pct(view.insiderRate)} · Dev ${esc(view.devStatus)}`,
+    `🛡 前十持有人占比 ${pct(view.top10Rate)} · 捆绑交易占比 ${pct(view.bundlerRate)} · 内幕交易占比 ${pct(view.insiderRate)} · 开发者持仓 ${developerStatus(view.devStatus)}`,
   );
   const socials = [
-    view.socials.telegram ? 'TG' : null,
+    view.socials.telegram ? 'Telegram' : null,
     view.socials.twitter ? 'X' : null,
-    view.socials.website ? 'Web' : null,
+    view.socials.website ? '官网' : null,
   ].filter(Boolean);
   if (socials.length > 0) lines.push(`🌐 ${socials.join(' · ')}`);
   lines.push('');
@@ -228,7 +229,7 @@ export function formatExitAlert(view: ExitView): string {
     `🔴 退出提醒 ${signalShortId(view.signalId)}`,
     `$${esc(view.symbol)} · ${esc(view.launchpad)} · ${view.tokenAgeMinutes ?? '—'} 分钟`,
     '━━━━━━━━━━━━━━',
-    `${view.exitedClusters} 个簇完整清仓（${view.clusterBreakdown
+    `${view.exitedClusters} 组独立钱包完整清仓（${view.clusterBreakdown
       .map((b) => `${b.label} ×${b.count}`)
       .join(' · ')}）`,
   ];

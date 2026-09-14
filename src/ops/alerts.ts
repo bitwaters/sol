@@ -1,3 +1,4 @@
+import { sourceLabel, utcTime } from '../telegram/labels.js';
 import { readdirSync, statSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from '../logger.js';
@@ -43,14 +44,14 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
       alerts.push({
         kind: `heartbeat:${row.source}`,
         severity: 'error',
-        message: `poller ${row.source} 心跳丢失（最后成功 ${row.last_success_at ?? '—'}）`,
+        message: `${sourceLabel(row.source)}采集超时（最近成功：${utcTime(row.last_success_at)}）`,
       });
     }
     if (row.gap_from_ts !== null) {
       alerts.push({
         kind: `gap:${row.source}`,
         severity: 'warn',
-        message: `poller ${row.source} 存在采集缺口 [${row.gap_from_ts}, ${row.gap_to_ts}]`,
+        message: `${sourceLabel(row.source)}存在采集缺口：${utcTime(row.gap_from_ts)} 至 ${utcTime(row.gap_to_ts)}`,
       });
     }
   }
@@ -59,7 +60,7 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
     alerts.push({
       kind: 'gmgn_ban',
       severity: 'error',
-      message: `GMGN 封禁中，恢复时间 ${new Date(gatewayBannedUntilMs).toISOString()}`,
+      message: `GMGN 封禁中，恢复时间 ${utcTime(gatewayBannedUntilMs / 1000)}`,
     });
   }
 
@@ -70,7 +71,7 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
     alerts.push({
       kind: 'push_unknown',
       severity: 'warn',
-      message: `push_tasks unknown 堆积 ${unknown.n} 条（阈值 ${unknownPileupThreshold}）`,
+      message: `送达结果待确认的推送积压 ${unknown.n} 条（告警阈值 ${unknownPileupThreshold} 条）`,
     });
   }
 
