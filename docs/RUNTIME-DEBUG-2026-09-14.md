@@ -10,6 +10,7 @@
 2. 评估执行期间的新成交曾被简单去重丢弃。现在标记代币有更新，当前评估结束后合并为一次重验，同代币仍不并发执行。
 3. GMGN 客户端原先只读取限流响应头，忽略响应体 `reset_at`。现读取两者并采用更晚的截止，缺失时才使用网关保守等待策略。
 4. Telegram 传输失败缺少确定响应时，现在进入 `unknown`，保留次数和重试时间；确定的 API 错误仍为 `failed`。不保证 Telegram 在不确定重试场景下绝对不重复送达。
+5. Trojan 链接改为官方 `solana_trojanbot`，移除没有验证依据的代币 `start` 参数；按钮表示打开交易页面/机器人，不表示应用执行交易。来源：[官方深链说明](https://docs.trojanonsolana.com/about-trojan-on-solana/deep-link-setup)。Photon/BullX 登录后的代币定位仍需界面验收。
 
 ## 耗时观测
 
@@ -33,6 +34,13 @@
 
 ## 验证状态
 
-- 本地 17 个测试文件、129 个用例通过；包含断网恢复、历史缺口不重复开启、评估期间更新、未知送达有限重试、Telegram 429 和持久化在途任务重开。
+- 本地 18 个测试文件、132 个用例通过；包含断网恢复、历史缺口不重复开启、评估期间更新、未知送达有限重试、Telegram 429、持久化在途任务重开及管理员命令/回调鉴权。
 - 真实 follow 分页及最终版本 30 分钟连续运行待 SEA 复验。官方 [track 接口说明](https://github.com/GMGNAI/gmgn-skills/blob/main/skills/gmgn-track/SKILL.md) 声明响应含 `next_page_token`，但 [CLI 实现](https://github.com/GMGNAI/gmgn-skills/blob/main/src/commands/track.ts) 没有提供 follow-wallet 的分页输入选项，不能据此证明具体请求参数有效。
 - Telegram 真实发送仍待授权；本地直连只读预检返回传输错误，不计作权限验证成功。
+
+## 追加证据
+
+- SEA 无网络隔离容器中，真实 HTTP 断连/恢复、HTTP 429 等待/恢复以及持久化数据库重开均通过。
+- 分页两次请求各 100 条，第二页重叠 100 条、更旧记录 0、游标未变，仍未通过。
+- 新备份包含 3,036 个事件，完整性检查通过；旧镜像只读访问当前数据库通过。
+- SEA IPv4 访问 Telegram 根地址 HTTP 302；凭证文件权限 600，数据目录权限 700。

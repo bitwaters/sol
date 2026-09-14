@@ -135,7 +135,8 @@ function buildLinks(token: string, links: string[]): string {
   const urls: Record<string, string> = {
     gmgn: `https://gmgn.ai/sol/token/${token}`,
     photon: `https://photon-sol.tinyastro.io/en/lp/${token}`,
-    trojan: `https://t.me/TrojanOnSolanaBot?start=${token}`,
+    // Official entry point. A token deeplink requires a verified referral-code contract.
+    trojan: 'https://t.me/solana_trojanbot',
     bullx: `https://bullx.io/terminal?chainId=1399811149&address=${token}`,
   };
   return links
@@ -150,18 +151,19 @@ export function buildKeyboard(
   token: string,
   options: FormatOptions,
 ): { inline_keyboard: Array<Array<{ text: string; url?: string; callback_data?: string }>> } {
+  const encodedToken = encodeURIComponent(token);
   const urls: Record<string, string> = {
-    gmgn: `https://gmgn.ai/sol/token/${token}`,
-    photon: `https://photon-sol.tinyastro.io/en/lp/${token}`,
-    trojan: `https://t.me/TrojanOnSolanaBot?start=${token}`,
-    bullx: `https://bullx.io/terminal?chainId=1399811149&address=${token}`,
+    gmgn: `https://gmgn.ai/sol/token/${encodedToken}`,
+    photon: `https://photon-sol.tinyastro.io/en/lp/${encodedToken}`,
+    trojan: 'https://t.me/solana_trojanbot',
+    bullx: `https://bullx.io/terminal?chainId=1399811149&address=${encodedToken}`,
   };
   const buyUrl = urls[options.buyButton] ?? urls['gmgn']!;
   return {
     inline_keyboard: [
       [
         { text: '📈 图表', url: urls['gmgn']! },
-        { text: '⚡ 一键买入', url: buyUrl },
+        { text: options.buyButton === 'trojan' ? '⚡ 打开交易机器人' : '⚡ 打开交易页', url: buyUrl },
       ],
       [
         { text: '🔁 刷新', callback_data: `refresh:${token}` },

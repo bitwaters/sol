@@ -2,8 +2,11 @@
 
 - 来源：https://github.com/GMGNAI/gmgn-skills （MIT License，见同目录 `LICENSE`）
 - 文件：`OpenApiClient.ts`、`signer.ts`，复制自上游 `src/client/`
-- 本地修改（仅一处）：
-  - `OpenApiError` 增加 `export`，供本项目限流器按类型识别 429 / 封禁
+- 本地补丁（升级时必须保留）：
+  - 导出 `OpenApiError`，供网关识别限流。
+  - 普通 HTTP 429 和业务限流统一交给网关，不在客户端绕过共享额度重试。
+  - 同时读取响应头与响应体 `reset_at`，采用更晚的恢复时间。
+  - 请求超时及实际接口字段/参数适配；覆盖前须比较当前文件差异并运行契约、限流与故障演练。
 - 升级方式：从上游重新复制后重放上述补丁
 - 已知限制：
   - 上游 client 使用全局 `fetch`，不自带代理；本项目在启动时可通过 `undici` 的
