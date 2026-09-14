@@ -1,8 +1,11 @@
+import { captureDelivery } from './research/delivery.js';
+import { loadResearchConfig } from './research/config.js';
+import { reserveResearch, collectResearch } from './research/collector.js';
+import { evaluateResearchOutcomes } from './research/outcomes.js';
 import { repairBaselines } from './backtest/repair.js';
 import { EvaluationScheduler } from './signal/scheduler.js';
 import { runtimeMetrics } from './ops/metrics.js';
 import { evaluateOutcomes } from './backtest/evaluate.js';
-import { sampleControls } from './backtest/control.js';
 import { sendDailyReport } from './backtest/report.js';
 import { backupDatabase, sendOpsAlerts } from './ops/alerts.js';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
@@ -30,6 +33,7 @@ const log = createLogger({ module: 'main' });
 async function main(): Promise<void> {
   const loaded = loadConfig();
   const { config, env, dryRun } = loaded;
+  const research = loadResearchConfig();
   log.info('配置加载完成', {
     configVersion: loaded.configVersion,
     rulesVersion: loaded.rulesVersion,
@@ -182,11 +186,14 @@ async function main(): Promise<void> {
 
   // M4/M5：数据评估、对照采样、退出监控、备份与候选维护（不依赖 Telegram）
   const measurementGateway = gateway.background();
+  const researchDeps = { ...engineDeps, gateway: measurementGateway, research: research.config, researchVersion: research.version };
   let measuring = false;
   const runMeasurements = async (): Promise<void> => {
     if (measuring) return;
     measuring = true;
     try {
+      await collectResearch(researchDeps);
+      await evaluateResearchOutcomes(researchDeps);
       await repairBaselines({ ...engineDeps, gateway: measurementGateway, maxPerRun: 4 });
       await evaluateOutcomes({ db, config, gateway: measurementGateway,
         logger: log.child({ module: 'backtest' }), maxPerRun: 4 });
@@ -196,14 +203,7 @@ async function main(): Promise<void> {
   const backtestTimer = setInterval(() => { void runMeasurements(); }, 30_000);
   const runControls = (): void => {
     try {
-      const created = sampleControls({
-        db,
-        config,
-        logger: log.child({ module: 'control' }),
-        blacklist,
-        configVersion: loaded.configVersion,
-        rulesVersion: loaded.rulesVersion,
-      });
+      const created = reserveResearch(researchDeps);
       if (created > 0) void runMeasurements();
     } catch (err) {
       log.error('对照采样失败', { error: err });
@@ -295,6 +295,7 @@ async function main(): Promise<void> {
     });
     const sender = grammySender(bot);
     const pusher = new Pusher({
+      beforeRun: () => captureDelivery(researchDeps),
       db,
       blacklist,
       config,

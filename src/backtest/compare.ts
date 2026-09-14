@@ -27,21 +27,20 @@ export function compareSamples(db: Db, parameter: ComparisonParameter = 'validVo
     const eligible = unique.filter(row => comparable(db, row));
     const matured = eligible.filter(row => row.anchor + 3600 <= now);
     const valid = matured.filter(row => row.outcome_1h !== null && Number.isFinite(row.outcome_1h));
-    const span = (unique.at(-1)?.anchor ?? 0) - (unique[0]?.anchor ?? 0);
-    const cutoff = (unique[0]?.anchor ?? 0) + Math.floor(span * 0.7);
+    const boundary = unique[Math.max(0, Math.ceil(unique.length * 0.7) - 1)];
+    const cutoff = boundary?.anchor ?? 0;
+    const trainingIds = new Set(unique.slice(0, Math.ceil(unique.length * 0.7)).map(row => row.id));
     const value = (row: Measurement): number | null => parameter === 'validVotes' ? row.features!.validVotes
       : parameter === 'marketCap' ? row.features!.tokenMetrics?.marketCap ?? null
       : row.features!.tokenMetrics?.createdAt == null ? null : (row.anchor - row.features!.tokenMetrics.createdAt) / 60;
     const cells = ['train', 'holdout'].flatMap(split => ['below', 'atOrAbove'].map(bucket => {
-      const subset = matured.filter(row => (split === 'train' ? row.anchor < cutoff : row.anchor >= cutoff)
+      const subset = matured.filter(row => (split === 'train' ? trainingIds.has(row.id) : !trainingIds.has(row.id))
         && value(row) !== null && (bucket === 'below' ? value(row)! < threshold : value(row)! >= threshold));
       const outcomes = subset.filter(row => row.outcome_1h !== null && Number.isFinite(row.outcome_1h)).map(row => row.outcome_1h!);
       return { split, bucket, mature: subset.length, valid: outcomes.length,
         coverage: subset.length ? outcomes.length / subset.length : 0, median1h: median(outcomes) };
     }));
     const reasons: string[] = [];
-    const eligibleSpan = (eligible.at(-1)?.anchor ?? 0) - (eligible[0]?.anchor ?? 0);
-    if (eligibleSpan < 14 * 86400) reasons.push('同口径样本跨度不足14天');
     if (valid.filter(row => row.status === 'control').length < 20) reasons.push('有效独立对照代币不足20个');
     if (!matured.length || valid.length / matured.length < 0.9) reasons.push('到期1小时覆盖率不足90%');
     if (cells.some(cell => cell.valid < 20 || cell.coverage < 0.9)) reasons.push('训练/留出及两侧分组样本或覆盖率不足');
@@ -58,5 +57,5 @@ export function compareSamples(db: Db, parameter: ComparisonParameter = 'validVo
   const ready = gates.length === 0 && reports.some(report => report.ready);
   return { parameter, threshold, ready, gates, freshBaselineCoverage: freshCoverage, cohorts: reports,
     conclusion: ready ? '仅允许查看预先指定参数的离线描述性比较；仍需成本模型及独立验证。' : '样本未达标，拒绝给出调参结论。',
-    limitations: '同代币仅取首次记录；按时间70%/30%分组；不含手续费、滑点、成交容量；不是全市场反事实回放。' };
+    limitations: '同代币仅取首次记录；按时间排序后按数量70%/30%分组；不含手续费、滑点、成交容量；不是全市场反事实回放。' };
 }

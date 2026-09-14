@@ -17,7 +17,7 @@ const rangeSchema = z.strictObject({
 });
 
 
-const configSchema = z
+export const configSchema = z
   .strictObject({
     chain: z.literal('sol'),
     signal: z.strictObject({

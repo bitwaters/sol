@@ -152,6 +152,7 @@ export class GmgnGateway {
   /** Low-priority measurement traffic shares the global ban and budget. */
   background() {
     return {
+      fetchWalletStats: (wallet: string) => this.call('walletStats', c => c.getWalletStats('sol', [wallet], '7d'), true),
       fetchTokenInfo: (address: string) => this.call('tokenInfo', c => c.getTokenInfo('sol', address), true),
       fetchTokenSecurity: (address: string) => this.call('tokenSecurity', c => c.getTokenSecurity('sol', address), true),
       fetchKline: (address: string, resolution: string, from: number, to: number) =>

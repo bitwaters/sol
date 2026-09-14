@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "intervalSec": 300,
+  "maxPerStratum": 1,
+  "maxPending": 24,
+  "maxPerBatch": 2,
+  "maxWalletRefresh": 2,
+  "maxSnapshotTrades": 5000,
+  "maxSnapshotWallets": 100,
+  "windowMinutes": 60,
+  "minIndependentTokens": 20,
+  "minPerCell": 20,
+  "baselineCoverage": 0.95,
+  "outcomeCoverage": 0.9
+}

@@ -267,3 +267,34 @@ CREATE TABLE IF NOT EXISTS data_gaps (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_gap_open ON data_gaps(source) WHERE state='open';
 CREATE INDEX IF NOT EXISTS idx_gap_interval ON data_gaps(from_ts,to_ts);
+
+-- Independent research universe. Payloads contain private snapshots, never public report output.
+CREATE TABLE IF NOT EXISTS research_runs (
+  id INTEGER PRIMARY KEY, sampled_at INTEGER NOT NULL, version TEXT NOT NULL,
+  universe INTEGER NOT NULL, selected INTEGER NOT NULL, strata TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS research_samples (
+  id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES research_runs(id),
+  token TEXT NOT NULL, selected_at INTEGER NOT NULL, anchor_at INTEGER,
+  stratum INTEGER NOT NULL, probability REAL NOT NULL,
+  config_version TEXT NOT NULL, rules_version TEXT NOT NULL, research_version TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'pending', baseline TEXT, price_at INTEGER,
+  initial BLOB, frozen BLOB, diagnostics TEXT, error TEXT,
+  UNIQUE(run_id,token)
+);
+CREATE INDEX IF NOT EXISTS idx_research_state ON research_samples(state,selected_at);
+CREATE TABLE IF NOT EXISTS research_outcomes (
+  sample_id INTEGER NOT NULL REFERENCES research_samples(id), horizon INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT 'pending', ratio REAL, candle_at INTEGER,
+  attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL,
+  path TEXT, PRIMARY KEY(sample_id,horizon)
+);
+CREATE INDEX IF NOT EXISTS idx_research_outcomes_due ON research_outcomes(state,next_at);
+CREATE TABLE IF NOT EXISTS research_experiments (
+  id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, definition TEXT NOT NULL,
+  boundary_id INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS research_delivery_frames (
+  id INTEGER PRIMARY KEY, captured_at INTEGER NOT NULL, digest TEXT NOT NULL UNIQUE,
+  frame BLOB, error TEXT
+);

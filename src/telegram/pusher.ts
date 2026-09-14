@@ -21,6 +21,7 @@ import {
 import { TelegramRateLimitError, type TelegramApi } from './types.js';
 
 export interface PusherDeps {
+  beforeRun?: () => void;
   blacklist?: CexBlacklist;
   configVersion?: string;
   rulesVersion?: string;
@@ -259,6 +260,7 @@ export class Pusher {
     if (this.running) return empty;
     this.running = true;
     try {
+      try { this.deps.beforeRun?.(); } catch { logger.warn('研究投递快照记录失败'); }
       return await this.runBatch();
     } finally {
       this.running = false;

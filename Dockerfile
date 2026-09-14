@@ -14,7 +14,7 @@ WORKDIR /app
 ENV NODE_ENV=production TZ=UTC
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY package.json config.jsonc ./
+COPY package.json config.jsonc research.json ./
 COPY data/cex-blacklist.json ./data/cex-blacklist.json
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node

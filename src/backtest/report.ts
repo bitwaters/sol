@@ -1,3 +1,4 @@
+import { researchLines } from '../research/report.js';
 import { qualityOverview, qualityReportLines } from './quality-report.js';
 import { compareSamples } from './compare.js';
 import { reasonLabel, sourceLabel } from '../telegram/labels.js';
@@ -117,7 +118,7 @@ export function buildStatsReport(db: Db, config: AppConfig): StatsReport {
   const evaluated = pushedQuality.cohorts.reduce((sum, cohort) => sum + cohort.horizons[1]!.valid, 0);
   const coverage = matured > 0 ? evaluated / matured : 0;
 
-  const lines: string[] = qualityReportLines(db);
+  const lines: string[] = [...researchLines(db), '', ...qualityReportLines(db)];
   lines.push('', '以下全量价格描述含不同数据版本，不用于验证参数。');
   lines.push('📈 信号表现（价格变化倍数，1.00x = 持平）');
   lines.push(

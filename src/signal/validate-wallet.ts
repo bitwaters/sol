@@ -15,6 +15,8 @@ export interface WalletValidationInput {
   clusters: ClusterResult;
   hasRecentGap: boolean;
   nowSec: number;
+  /** Frozen observed counts for isolated research replay. */
+  observedBuys?: Record<string, number>;
 }
 
 export interface WalletValidationResult {
@@ -64,7 +66,7 @@ export function validateWallets(input: WalletValidationInput): WalletValidationR
     if (profile.tags.some((tag) => excludeTags.has(tag))) continue;
     if (nowSec - profile.walletCreatedAt < minWalletAgeDays * 86_400) continue;
 
-    const observed = db.prepare("SELECT COUNT(*) AS n FROM trades WHERE maker = ? AND side = 'buy' AND timestamp <= ?").get(stat.wallet, nowSec) as { n: number };
+    const observed = input.observedBuys ? { n: input.observedBuys[stat.wallet] ?? 0 } : db.prepare("SELECT COUNT(*) AS n FROM trades WHERE maker = ? AND side = 'buy' AND timestamp <= ?").get(stat.wallet, nowSec) as { n: number };
     if (observed.n < config.walletFilter.minObservedBuys) continue;
     valid.push({ ...stat, tags: profile.tags });
   }
