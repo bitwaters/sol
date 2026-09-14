@@ -4,6 +4,7 @@ import { getSourceHealth, upsertSourceHealth, type SourceHealth } from '../store
 import { ingestBatch, findCanonicalEventId } from '../store/repo/trades.js';
 import { RateLimitedError } from './gateway.js';
 import { normalizeTrackResponse, type NormalizedTrade, type TradeSource } from './normalize.js';
+import { runtimeMetrics } from '../ops/metrics.js';
 
 export interface PollerDeps {
   source: TradeSource;
@@ -92,6 +93,7 @@ export class Poller {
       };
     }
     this.running = true;
+    const started = performance.now();
     try {
       const result = await this.pollOnce();
       this.consecutiveErrors = 0;
@@ -100,6 +102,7 @@ export class Poller {
       return this.handleError(err);
     } finally {
       this.running = false;
+      runtimeMetrics.observe(`poll.round.${this.deps.source}`, performance.now() - started);
     }
   }
 
@@ -198,6 +201,10 @@ export class Poller {
       patch.backfill_cursor = null;
     }
 
+    // Measure only first-seen canonical events, not repeated rows in latest-100 pages.
+    const firstSeen = new Map(collected.filter(trade => findCanonicalEventId(db, source, trade) === null)
+      .map(trade => [trade.eventId, trade.timestamp]));
+    const ingestStarted = performance.now();
     const ingest = ingestBatch(
       db,
       source,
@@ -208,6 +215,10 @@ export class Poller {
         ? (inserted) => this.deps.onTrades?.(source, inserted)
         : undefined,
     );
+    runtimeMetrics.observe(`poll.ingest.${source}`, performance.now() - ingestStarted);
+    for (const timestamp of firstSeen.values()) {
+      runtimeMetrics.observe(`poll.event_age.${source}`, this.now() - timestamp * 1000);
+    }
 
     logger.info('采集批次完成', {
       source,

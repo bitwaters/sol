@@ -32,6 +32,7 @@ interface ResponseEnvelope {
   error?: string;
   upgrade_url?: string;
   upgrade_message?: string;
+  reset_at?: number | string;
 }
 
 interface OpenApiErrorParams {
@@ -738,7 +739,8 @@ export class OpenApiClient {
         apiCode: json.code,
         apiError: json.error ?? (res.status === 429 ? 'RATE_LIMIT_EXCEEDED' : undefined),
         apiMessage: json.message,
-        resetAtUnix,
+        resetAtUnix: Math.max(resetAtUnix ?? 0,
+          parseRateLimitReset(String(json.reset_at ?? '')) ?? 0) || undefined,
         upgradeUrl: json.upgrade_url,
         upgradeMessage: json.upgrade_message,
       });

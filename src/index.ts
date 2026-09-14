@@ -1,4 +1,5 @@
 import { EvaluationScheduler } from './signal/scheduler.js';
+import { runtimeMetrics } from './ops/metrics.js';
 import { evaluateOutcomes } from './backtest/evaluate.js';
 import { sampleControls } from './backtest/control.js';
 import { sendDailyReport } from './backtest/report.js';
@@ -39,6 +40,7 @@ async function main(): Promise<void> {
   mkdirSync(dataDir, { recursive: true });
   const db = openDatabase({ path: join(dataDir, 'meme.sqlite') });
   setKv(db, 'service_started_at', Math.floor(Date.now() / 1000));
+  setKv(db, 'runtime_metrics', null);
   setKv(db, 'enabled_sources', ['smartmoney', 'kol', ...(env.GMGN_PRIVATE_KEY ? ['follow'] : [])]);
 
   const ratePerSecond = env.GMGN_RATE_LIMIT_PER_SEC;
@@ -71,7 +73,10 @@ async function main(): Promise<void> {
   const evaluationScheduler = new EvaluationScheduler({
     concurrency: 2,
     delayMs: 250,
-    run: (token) => evaluateToken(engineDeps, token),
+    run: async (token) => {
+      const result = await evaluateToken(engineDeps, token);
+      runtimeMetrics.observe(`evaluation.result.${result.status}`, 0);
+    },
     onError: (token, error) => log.error('候选评估失败', { token, error }),
   });
   const scheduleEvaluation = (token: string): void => evaluationScheduler.schedule(token);
@@ -167,6 +172,12 @@ async function main(): Promise<void> {
   const archiveStartupTimer = setTimeout(runArchive, 10_000);
   const archiveTimer = setInterval(runArchive, 6 * 3600_000);
   const shutdownHooks: Array<() => void> = [];
+  const metricsTimer = setInterval(() => {
+    const snapshot = { timestamp: Math.floor(Date.now() / 1000), metrics: runtimeMetrics.snapshot() };
+    setKv(db, 'runtime_metrics', snapshot);
+    log.info('运行耗时汇总', snapshot);
+  }, 60_000);
+  shutdownHooks.push(() => clearInterval(metricsTimer));
 
   // M4/M5：数据评估、对照采样、退出监控、备份与候选维护（不依赖 Telegram）
   const backtestTimer = setInterval(() => {

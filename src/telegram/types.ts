@@ -25,3 +25,11 @@ export class TelegramRateLimitError extends Error {
     this.retryAfterSec = retryAfterSec;
   }
 }
+
+/** The transport failed without a definitive Telegram response; delivery is uncertain. */
+export class TelegramDeliveryUnknownError extends Error {
+  constructor() {
+    super('Telegram transport failed; delivery outcome is unknown');
+    this.name = 'TelegramDeliveryUnknownError';
+  }
+}

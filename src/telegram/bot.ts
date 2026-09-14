@@ -1,11 +1,14 @@
-import { Bot } from 'grammy';
+import { Bot, HttpError } from 'grammy';
 import { buildStatsReport, splitReportText } from '../backtest/report.js';
 import type { AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
 import { getKv, setKv, type Db } from '../store/db.js';
-import { TelegramRateLimitError, type SendMessageOptions, type TelegramApi } from './types.js';
+import { TelegramDeliveryUnknownError, TelegramRateLimitError, type SendMessageOptions, type TelegramApi } from './types.js';
 
 function toTelegramError(err: unknown): never {
+  if (err instanceof HttpError || (err instanceof Error && ['TimeoutError', 'AbortError'].includes(err.name))) {
+    throw new TelegramDeliveryUnknownError();
+  }
   if (err === null || typeof err !== 'object') throw err;
   const candidate = err as { error_code?: number; parameters?: { retry_after?: number }; error?: { error_code?: number; parameters?: { retry_after?: number } } };
   const code = candidate.error_code ?? candidate.error?.error_code;

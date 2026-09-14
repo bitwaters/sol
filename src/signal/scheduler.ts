@@ -1,8 +1,13 @@
+import { runtimeMetrics } from '../ops/metrics.js';
+
 /** Coalesces token updates and bounds enrichment fan-out across tokens. */
 export class EvaluationScheduler {
   private readonly pending = new Set<string>();
   private readonly queue: string[] = [];
   private active = 0;
+  private readonly running = new Set<string>();
+  private readonly dirty = new Set<string>();
+  private readonly queuedAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private stopped = false;
 
@@ -16,8 +21,12 @@ export class EvaluationScheduler {
   }
 
   schedule(token: string): void {
-    if (this.stopped || this.pending.has(token)) return;
+    if (this.stopped) return;
+    // New trades arriving during async enrichment must get a final evaluation.
+    if (this.running.has(token)) { this.dirty.add(token); return; }
+    if (this.pending.has(token)) return;
     this.pending.add(token);
+    this.queuedAt.set(token, performance.now());
     this.queue.push(token);
     if (this.timer === null && this.active < this.options.concurrency) {
       this.timer = setTimeout(() => { this.timer = null; this.pump(); }, this.options.delayMs);
@@ -30,17 +39,26 @@ export class EvaluationScheduler {
     this.timer = null;
     this.queue.length = 0;
     this.pending.clear();
+    this.dirty.clear();
+    this.queuedAt.clear();
   }
 
   private pump(): void {
     while (!this.stopped && this.active < this.options.concurrency && this.queue.length > 0) {
       const token = this.queue.shift()!;
+      const started = performance.now();
+      runtimeMetrics.observe('evaluation.queue', started - this.queuedAt.get(token)!);
+      this.queuedAt.delete(token);
+      this.running.add(token);
       this.active++;
       void Promise.resolve().then(() => this.options.run(token))
         .catch(error => this.options.onError(token, error))
         .finally(() => {
+          runtimeMetrics.observe('evaluation.run', performance.now() - started);
           this.active--;
+          this.running.delete(token);
           this.pending.delete(token);
+          if (this.dirty.delete(token)) this.schedule(token);
           this.pump();
         });
     }

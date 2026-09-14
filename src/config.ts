@@ -9,7 +9,7 @@ import { z } from 'zod';
 export const PROJECT_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /** 规则版本：影响信号计算逻辑时手动递增（写入 signal_evaluations.rules_version） */
-export const RULES_VERSION = 'live-2026-09-14.3';
+export const RULES_VERSION = 'live-2026-09-14.4';
 
 const rangeSchema = z.strictObject({
   min: z.number().nullable(),

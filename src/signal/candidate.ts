@@ -1,3 +1,4 @@
+import { measureAsync } from '../ops/metrics.js';
 import { Decimal } from 'decimal.js';
 import { boundHoldingRatio } from './members.js';
 import type { AppConfig } from '../config.js';
@@ -602,7 +603,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
   // 富化（失败 → suppressed）
   let tokenSnapshot: TokenSnapshot;
   try {
-    tokenSnapshot = await enrichToken(db, gateway, token, { logger, now: deps.now });
+    tokenSnapshot = await measureAsync('evaluation.token_enrich', () => enrichToken(db, gateway, token, { logger, now: deps.now }));
   } catch (err) {
     logger.warn('候选富化失败', { token, error: err });
     if (existing) {
@@ -640,7 +641,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
     .filter((wallet) => { const profile = getWalletProfile(db, wallet); return !profile || now - profile.refreshedAt > 1800; });
   if (missingProfiles.length > 0) {
     try {
-      await enrichWallets(db, gateway, missingProfiles, { logger, now: deps.now });
+      await measureAsync('evaluation.wallet_enrich', () => enrichWallets(db, gateway, missingProfiles, { logger, now: deps.now }));
     } catch (err) {
       logger.warn('钱包画像补拉失败', { token, count: missingProfiles.length, error: err });
     }
@@ -648,7 +649,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
 
   // 所有异步富化完成后，以最新时刻、窗口和生命周期做同步判定。
   try {
-    tokenSnapshot = await enrichToken(db, gateway, token, { logger, now: deps.now });
+    tokenSnapshot = await measureAsync('evaluation.token_enrich', () => enrichToken(db, gateway, token, { logger, now: deps.now }));
   } catch {
     return { ...base, status: 'suppressed_enrich_failed', signalId: existing?.id ?? null, reason: 'enrich_failed' };
   }

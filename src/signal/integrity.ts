@@ -1,4 +1,4 @@
-import { deleteKv, getKv } from '../store/db.js';
+import { getKv, setKv } from '../store/db.js';
 import { getSourceHealth, upsertSourceHealth } from '../store/repo/health.js';
 import type { Db } from '../store/db.js';
 
@@ -33,7 +33,13 @@ export function resolveStaleGaps(
     const since = getKv<number>(db, `gap_since:${source}`) ?? health.updated_at ?? nowSec;
     const ageSec = nowSec - since;
     if (ageSec <= maxAgeSec) continue;
-    deleteKv(db, `gap_since:${source}`);
+    // After accepting lost history, resume at the newest event already observed.
+    // Using only the oldest overlapping row makes the next latest-100 page reopen
+    // the same gap forever as that row rolls out of the page.
+    const newest = db.prepare(`SELECT MAX(t.timestamp) AS ts FROM trades t
+      JOIN trade_sources s ON s.event_id=t.event_id WHERE s.source=? AND t.timestamp<=?`)
+      .get(source, nowSec) as { ts: number | null };
+    const resumeAt = Math.max(health.watermark_ts ?? 0, health.gap_to_ts, newest.ts ?? 0);
     accepted.push({
       source,
       gapFrom: health.gap_from_ts,
@@ -41,16 +47,15 @@ export function resolveStaleGaps(
       updatedAt: health.updated_at ?? nowSec,
       ageSec,
     });
-    upsertSourceHealth(
-      db,
-      {
-        source,
-        watermark_ts: Math.max(health.watermark_ts ?? 0, health.gap_to_ts),
-        gap_from_ts: null,
-        gap_to_ts: null,
-      },
-      nowSec,
-    );
+    db.transaction(() => {
+      // Retain the lost interval and revoke cost eligibility through the resume point.
+      upsertSourceHealth(db, { source, gap_to_ts: resumeAt }, nowSec);
+      setKv(db, `last_accepted_gap:${source}`, { from: health.gap_from_ts, to: resumeAt,
+        acceptedAt: nowSec, recovered: false }, nowSec);
+      setKv(db, `accepted_gap_count:${source}`, (getKv<number>(db, `accepted_gap_count:${source}`) ?? 0) + 1, nowSec);
+      upsertSourceHealth(db, { source, watermark_ts: resumeAt, gap_from_ts: null,
+        gap_to_ts: null, backfill_cursor: null }, nowSec);
+    })();
   }
   return accepted;
 }

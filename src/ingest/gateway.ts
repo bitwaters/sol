@@ -1,6 +1,7 @@
 import type { OpenApiClient } from '../gmgn/OpenApiClient.js';
 import type { Logger } from '../logger.js';
 import { BanGate, TokenBucket } from './limiter.js';
+import { runtimeMetrics } from '../ops/metrics.js';
 
 /** 端点权重（来源：GMGN 官方 skill 文档，§4.2） */
 export const ROUTE_WEIGHTS = {
@@ -87,17 +88,23 @@ export class GmgnGateway {
 
   /** 调用前：封禁门 → 权重获取 → 再查封禁门（等待期间可能新增封禁）→ 执行 */
   async call<T>(route: RouteName, fn: (client: OpenApiClient) => Promise<T>): Promise<T> {
+    const queuedAt = performance.now();
     // 排队期间可能新增封禁；过期的额度不能攒到解禁后集中释放。
     while (true) {
       await this.banGate.waitIfBanned();
       await this.limiter.acquire(ROUTE_WEIGHTS[route]);
       if (!this.banGate.isBanned) break;
     }
+    const requestedAt = performance.now();
+    runtimeMetrics.observe(`gmgn.queue.${route}`, requestedAt - queuedAt);
+    let outcome = 'ok';
     try {
       return await fn(this.client);
     } catch (err) {
+      outcome = 'error';
       const rateLimit = extractRateLimitInfo(err);
       if (rateLimit) {
+        outcome = 'limited';
         const resetAtMs =
           rateLimit.resetAtUnix != null
             ? rateLimit.resetAtUnix * 1000 + 1000
@@ -111,6 +118,8 @@ export class GmgnGateway {
         throw new RateLimitedError(resetAtMs, rateLimit.apiError);
       }
       throw err;
+    } finally {
+      runtimeMetrics.observe(`gmgn.request.${route}.${outcome}`, performance.now() - requestedAt);
     }
   }
 

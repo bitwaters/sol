@@ -1,3 +1,6 @@
+import { measureAsync, runtimeMetrics } from '../ops/metrics.js';
+import { measureTelegram } from './telemetry.js';
+import { TelegramDeliveryUnknownError } from './types.js';
 import type { CexBlacklist } from '../enrich/wallet.js';
 import { countOtherExitedClusters } from './exit-monitor.js';
 import { boundHoldingRatio, closedBoundClusters } from '../signal/members.js';
@@ -45,6 +48,7 @@ export interface PushRunResult {
 
 interface TaskRow {
   id: number;
+  created_at: number;
   signal_id: number;
   kind: 'signal' | 'escalate' | 'exit_alert';
   alert_type: string | null;
@@ -331,7 +335,8 @@ export class Pusher {
         result.deferred += 1;
         continue;
       }
-      const outcome = await this.processTask(task, nowSec);
+      runtimeMetrics.observe(`push.queue.${task.kind}`, Math.max(0, this.now() - task.created_at * 1000));
+      const outcome = await measureAsync(`push.process.${task.kind}`, () => this.processTask(task, nowSec));
       if (outcome === 'sent') {
         result.sent += 1;
         if (!isExit) budget -= 1;
@@ -352,7 +357,8 @@ export class Pusher {
   }
 
   private async processTask(task: TaskRow, nowSec: number): Promise<'sent' | 'failed' | 'cancelled' | 'deferred'> {
-    const { db, config, sender, chatId, logger } = this.deps;
+    const { db, config, chatId, logger } = this.deps;
+    const sender = measureTelegram(this.deps.sender);
 
     try {
       if (task.kind === 'signal' || task.kind === 'escalate') {
@@ -400,7 +406,7 @@ export class Pusher {
           }
           // 完整资格复核（票数/持仓/缺口/价格）
           if (this.deps.revalidate) {
-            const check = await this.deps.revalidate(signal.id);
+            const check = await measureAsync('push.revalidate', () => this.deps.revalidate!(signal.id));
             nowSec = Math.floor(this.now() / 1000);
             const current = db.prepare('SELECT status, triggered_at FROM signals WHERE id = ?').get(signal.id) as { status: string; triggered_at: number } | undefined;
             if (!current || current.status !== 'sending' || nowSec - current.triggered_at > 3600) {
@@ -599,9 +605,10 @@ export class Pusher {
       }
       const exhausted = attempts >= task.max_attempts;
       const retryAt = exhausted ? null : nowSec + 60 * attempts;
+      const status = err instanceof TelegramDeliveryUnknownError ? 'unknown' : 'failed';
       db.prepare(
-        `UPDATE push_tasks SET status = 'failed', attempts = ?, next_retry_at = ?, updated_at = ? WHERE id = ?`,
-      ).run(attempts, retryAt, nowSec, task.id);
+        `UPDATE push_tasks SET status = ?, attempts = ?, next_retry_at = ?, updated_at = ? WHERE id = ?`,
+      ).run(status, attempts, retryAt, nowSec, task.id);
       logger.error('推送失败', { taskId: task.id, attempts, exhausted, error: err });
       return 'failed';
     }
