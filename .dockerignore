@@ -11,3 +11,7 @@ test
 *.pem
 data/gmgn-api-keys
 data/debug
+
+# Only the public, versioned blacklist may enter the build context.
+data/*
+!data/cex-blacklist.json

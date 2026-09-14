@@ -7,10 +7,12 @@
 ## 目录与首次配置
 
 - `/www/wwwroot/sol`：GitHub 检出的代码。
-- `/etc/sol/sol.env`：从本地 `.env` 经 SSH 安全传输的凭证，root 所有、权限 600；父目录权限 700。
+- `/etc/sol/sol.env`：在本地生成部署凭证子集后经 SSH 安全传输的凭证，root 所有、权限 600；父目录权限 700。
 - `/var/lib/sol`：数据库、归档、备份和 CEX 黑名单；容器用户 UID/GID 1000，目录权限 700。
 
 凭证和运行数据放在 Web 根目录之外。SSH 主机、端口和私钥路径使用本地连接配置，不写入公开仓库。
+
+首次只读联调先在本地执行 `node scripts/prepare-sea-env.mjs`，生成被 Git 忽略的 `data/deployment/sea.env`（权限 600）。该文件仅包含 GMGN API Key、签名私钥、限流参数和 `DRY_RUN=1`，不含 Telegram 凭证。本地确认授权传输范围后再经 SSH 安装到上述受限路径，不能把凭证提交 GitHub。
 
 首次部署将空目录检出 `origin/main`；若目录已有仓库，应核验远端地址和未提交改动，不能覆盖未知文件。凭证文件从本地传输，不通过 GitHub，也不在服务器上手改。联调沿用 `DRY_RUN=1`。
 
