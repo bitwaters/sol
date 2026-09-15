@@ -13,21 +13,26 @@ export interface FrozenSnapshot {
 }
 export class SnapshotLimitError extends Error {}
 /** Capture only what is available NOW, including event arrival time and source arrival time.
- * Entire retained token history is frozen for same-tx clustering and cycle replay. Never query current state on replay. */
+ * Freeze the entire retained token history of every wallet appearing within the maximum replay window.
+ * Wallets outside that window cannot vote, contribute net flow, or bridge same-tx clustering (which only uses window members).
+ * Their unrelated history is omitted; relevant wallet histories are never truncated. */
 export function freezeSnapshot(db: Db, token: string, at: number, config: AppConfig, research: ResearchConfig,
   blacklist: CexBlacklist, quote?: TokenSnapshot, profiles: WalletProfile[] = []): FrozenSnapshot {
-  const trades = db.prepare('SELECT * FROM trades WHERE base_address=? AND timestamp<=? ORDER BY timestamp,event_id LIMIT ?')
-    .all(token, at, research.maxSnapshotTrades + 1) as Row[];
+  const trades = db.prepare(`WITH relevant AS (SELECT DISTINCT maker FROM trades WHERE base_address=? AND timestamp BETWEEN ? AND ?)
+    SELECT * FROM trades WHERE base_address=? AND timestamp<=? AND maker IN (SELECT maker FROM relevant)
+    ORDER BY timestamp,event_id LIMIT ?`)
+    .all(token,at-research.windowMinutes*60,at,token,at,research.maxSnapshotTrades + 1) as Row[];
   const makers = [...new Set(trades.map(t => String(t.maker)))];
   if (trades.length > research.maxSnapshotTrades || makers.length > research.maxSnapshotWallets)
     throw new SnapshotLimitError('snapshot_size_limit');
   const tables: Record<string, Row[]> = { trades };
   const tokenRow = getCachedToken(db, token);
   tables.tokens = db.prepare('SELECT * FROM tokens WHERE address=?').all(token) as Row[];
+  const marks=makers.map(()=>'?').join(',')||'NULL';
   tables.trade_sources = db.prepare(`SELECT s.* FROM trade_sources s JOIN trades t ON s.event_id=t.event_id
-    WHERE t.base_address=? AND t.timestamp<=?`).all(token, at) as Row[];
-  tables.wallet_positions = db.prepare('SELECT * FROM wallet_positions WHERE token=?').all(token) as Row[];
-  tables.position_checkpoints = db.prepare('SELECT * FROM position_checkpoints WHERE token=? AND checked_at<=?').all(token, at) as Row[];
+    WHERE t.base_address=? AND t.timestamp<=? AND t.maker IN (${marks})`).all(token,at,...makers) as Row[];
+  tables.wallet_positions = db.prepare(`SELECT * FROM wallet_positions WHERE token=? AND wallet IN (${marks})`).all(token,...makers) as Row[];
+  tables.position_checkpoints = db.prepare(`SELECT * FROM position_checkpoints WHERE token=? AND checked_at<=? AND wallet IN (${marks})`).all(token,at,...makers) as Row[];
   tables.wallets = []; const observedBuys: Record<string, number> = {};
   for (const maker of makers) {
     const row = db.prepare('SELECT * FROM wallets WHERE address=?').get(maker) as Row | undefined;

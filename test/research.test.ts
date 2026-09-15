@@ -270,3 +270,18 @@ describe('sample-count experiment progression',()=>{
     expect(compareResearch(s.db,r.definition,research,s.at+4400,r.id).ready).toBe(true);
   });
 });
+it('keeps complete histories of relevant wallets while excluding unrelated old-wallet snapshots',async()=>{
+  const s=await setup();const before=diagnose(s.freeze());
+  s.buy('inactive',s.at-7200);s.buy('w1',s.at-7200);
+  const f=freezeSnapshot(s.db,'T',s.at,s.deps.config,{...research,maxSnapshotWallets:3},s.deps.blacklist);
+  expect(f.tables.trades?.some(t=>t.maker==='inactive')).toBe(false);
+  expect(f.tables.wallet_positions?.some(t=>t.wallet==='inactive')).toBe(false);
+  expect(f.tables.trades?.filter(t=>t.maker==='w1')).toHaveLength(2);
+  expect(Object.keys(f.observedBuys)).toEqual(['w1','w2','w3']);
+  expect(diagnose(f).rawVotes).toBe(before.rawVotes);
+  expect(()=>freezeSnapshot(s.db,'T',s.at,s.deps.config,{...research,maxSnapshotTrades:3},s.deps.blacklist)).toThrow('snapshot_size_limit');
+  // An old same-transaction link between relevant wallets must still be available to clustering.
+  s.buy('w2',s.at-7200);s.db.prepare("UPDATE trades SET tx_hash='old-shared' WHERE maker IN ('w1','w2') AND timestamp=?").run(s.at-7200);
+  const clustered=s.freeze();expect(diagnose(clustered).rawVotes).toBe(2);
+  expect(replay(clustered,{parameter:'clusterMerge',value:false}).rawVotes).toBe(3);
+});
