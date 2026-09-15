@@ -52,6 +52,8 @@ export function freezeSnapshot(db: Db, token: string, at: number, config: AppCon
   tables.source_health = db.prepare('SELECT * FROM source_health').all() as Row[];
   tables.kv = db.prepare(`SELECT * FROM kv WHERE key IN ('quality_tracking_started_at','observation_started_at','paused',?,?,?,?)`)
     .all(`mute:${token}`, `rebuild_paused:${token}`, `hardblock:${token}`, `retrigger:${token}`) as Row[];
+  for(const maker of makers)tables.kv.push(...db.prepare('SELECT * FROM kv WHERE key IN (?,?)')
+    .all(`gap_affected:${token}:${maker}`,`gap_affected_until:${token}:${maker}`) as Row[]);
   return { token, at, config: structuredClone(config), maxWindowMinutes: research.windowMinutes, tables, observedBuys,
     quote: quote ?? (tokenRow ? rowToSnapshot(tokenRow) : null), blacklist: [...blacklist.entries.values()] };
 }

@@ -50,6 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_trade_alias_event ON trade_event_aliases(event_id
 -- 采集健康与缺口
 CREATE TABLE IF NOT EXISTS source_health (
   source TEXT PRIMARY KEY,
+  head_ts INTEGER,
   last_success_at INTEGER,
   watermark_ts INTEGER,             -- 已完整处理到的成交时间水位
   gap_from_ts INTEGER,

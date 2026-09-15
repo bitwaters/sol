@@ -18,13 +18,14 @@ export function pricePath(candles:ReturnType<typeof asCandles>,anchor:number,tar
     maxCloseDrawdown:closes.length?dd:null,closes};
 }
 export interface OutcomeRow {sample_id:number;horizon:number;attempts:number;token:string;anchor_at:number;baseline:string;}
-/** Reserve half the batch for old/retry work, while new-version first attempts cannot be buried in a backlog. */
+/** Reserve half the batch for current-version work (including retries), and half for older work. */
 export function dueResearchOutcomes(d:ResearchDeps,now:number):OutcomeRow[] {
   const scope=latestResearchScope(d.db);
   const query=`SELECT o.*,s.token,s.anchor_at,s.baseline FROM research_outcomes o JOIN research_samples s ON s.id=o.sample_id
     WHERE o.state='pending' AND o.next_at<=? AND s.state='ready'`;
-  const preferred=d.db.prepare(query+` AND s.research_version=? AND o.attempts=0 ORDER BY o.next_at,o.sample_id,o.horizon LIMIT ?`)
-    .all(now,scope?.research_version??'',Math.ceil(d.research.maxOutcomeBatch/2)) as OutcomeRow[];
+  const preferred=d.db.prepare(query+` AND s.research_version=? AND s.config_version=? AND s.rules_version=?
+      ORDER BY o.next_at,o.sample_id,o.horizon LIMIT ?`)
+    .all(now,scope?.research_version??'',scope?.config_version??'',scope?.rules_version??'',Math.ceil(d.research.maxOutcomeBatch/2)) as OutcomeRow[];
   const oldest=d.db.prepare(query+' ORDER BY o.next_at,o.sample_id,o.horizon LIMIT ?')
     .all(now,d.research.maxOutcomeBatch+preferred.length) as OutcomeRow[];
   const seen=new Set(preferred.map(r=>`${r.sample_id}:${r.horizon}`));

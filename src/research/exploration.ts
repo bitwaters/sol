@@ -52,6 +52,10 @@ export function exploreResearch(db:Db,config:ResearchConfig,now=Math.floor(Date.
         // The stored gap rule uses the production window, frozen at capture. Window experiments use full replay.
         r.d.windowStart!==undefined&&gapStatus(db,r.d.windowStart,r.s.anchor_at)==='clean');
       const classified=available.map(r=>({...r,next:classifyThreshold(r.d,experiment)}));
+      const remainingBlockers:Record<string,{label:string;count:number}>={};
+      for(const r of classified.filter(r=>r.next.factorPass&&!r.next.eligible))for(const key of r.next.otherFailures){
+        const blocker=remainingBlockers[key]??{label:r.d.checks[key]?.label??key,count:0};blocker.count++;remainingBlockers[key]=blocker;
+      }
       const cells=['retained','changed'].map(group=>{
         const matching=classified.filter(r=>group==='retained'?r.d.eligible&&r.next.eligible:r.d.eligible!==r.next.eligible);
         const mature=matching.filter(r=>r.s.anchor_at!+3600<=now);
@@ -61,14 +65,24 @@ export function exploreResearch(db:Db,config:ResearchConfig,now=Math.floor(Date.
       const baselineCoverage=selected.length?selected.filter(r=>r.s.state==='ready').length/selected.length:0;
       return {source,selected:selected.length,inputComplete:available.length,baselineCoverage,
         factorPass:classified.filter(r=>r.next.factorPass).length,fullPass:classified.filter(r=>r.next.eligible).length,
-        added:classified.filter(r=>!r.d.eligible&&r.next.eligible).length,cells,
+        added:classified.filter(r=>!r.d.eligible&&r.next.eligible).length,cells,remainingBlockers,
         trainingReady:baselineCoverage>=config.baselineCoverage&&cells.every(c=>c.valid>=config.minPerCell&&c.coverage>=config.outcomeCoverage)
           &&cells.reduce((n,c)=>n+c.valid,0)>=config.minIndependentTokens};
     });
     return {label:plan.label,experiment,planned:value===plan.candidate,cohorts,
       registrationReady:globalCoverage>=config.baselineCoverage&&cohorts.some(c=>c.trainingReady)};
   }));
-  return {scope,independentTokens:first.length,baselineCoverage:globalCoverage,factors,
+  const walletAttribution={observations:0,behaviorOnly:0,dataOnly:0,both:0,clear:0,legacy:0,
+    behaviorReasons:{} as Record<string,number>,dataReasons:{} as Record<string,number>};
+  for(const {d} of rows)for(const w of d?.wallets??[]){
+    walletAttribution.observations++;
+    if(!w.behaviorReasons||!w.dataReasons){walletAttribution.legacy++;continue;}
+    const behavior=w.behaviorReasons.length>0,data=w.dataReasons.length>0;
+    walletAttribution[behavior&&data?'both':behavior?'behaviorOnly':data?'dataOnly':'clear']++;
+    for(const category of ['behaviorReasons','dataReasons'] as const)for(const reason of w[category]!)
+      walletAttribution[category][reason]=(walletAttribution[category][reason]??0)+1;
+  }
+  return {scope,independentTokens:first.length,baselineCoverage:globalCoverage,factors,walletAttribution,
     registrations:db.prepare('SELECT id,created_at,definition,boundary_id,scope FROM research_experiments WHERE scope=?').all(JSON.stringify(scope)),
     limitation:'单项通过不代表完整入选；只做探索诊断，正式比较需完整回放和注册后的新代币留出验证；无天数门槛。'};
 }

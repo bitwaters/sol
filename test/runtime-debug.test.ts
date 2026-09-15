@@ -68,7 +68,9 @@ it('accepting a historical gap does not reopen it when oldest overlapping rows l
     const latest = Math.max(...page.map(row => row.timestamp));
     resolveStaleGaps(db, now);
     expect(getSourceHealth(db, 'smartmoney').watermark_ts).toBe(latest);
-    expect(getKv(db, 'last_accepted_gap:smartmoney')).toMatchObject({ from: oldWatermark, to: latest, recovered: false });
+    const gapEnd = Math.min(...page.map(row => row.timestamp));
+    expect(getKv(db, 'last_accepted_gap:smartmoney')).toMatchObject({ from: oldWatermark, to: gapEnd, recovered: false });
+    expect(db.prepare('SELECT to_ts,state FROM data_gaps').get()).toEqual({ to_ts: gapEnd, state: 'accepted' });
     page = page.slice(3);
     expect((await poller.tick()).gapDetected).toBe(false);
     expect(getSourceHealth(db, 'smartmoney').gap_from_ts).toBeNull();

@@ -23,6 +23,30 @@ async function setup(){
   return {...s,d,at,freeze};
 }
 describe('research snapshots and independent checks',()=>{
+  it('separates closed-wallet behavior from missing cost evidence and freezes gap attribution',async()=>{
+    const s=await setup();
+    s.db.prepare("UPDATE wallet_positions SET state='closed',cost_complete=0,last_sell_ts=cycle_started_at+30,sold_amount=bought_amount WHERE wallet='w1'").run();
+    s.db.prepare("UPDATE wallet_positions SET cost_complete=0 WHERE wallet='w2'").run();
+    setKv(s.db,'gap_affected:T:w2',true,s.at);setKv(s.db,'gap_affected_until:T:w2',s.at-10,s.at);
+    const f=s.freeze(),d=diagnose(f),closed=d.wallets.find(w=>w.wallet==='w1')!,gap=d.wallets.find(w=>w.wallet==='w2')!;
+    expect(closed.behaviorReasons).toEqual(expect.arrayContaining(['已清仓','快进快出']));expect(closed.dataReasons).toEqual([]);
+    expect(gap).toMatchObject({costState:'gap_affected',dataReasons:['历史缺口影响成本'],behaviorReasons:[]});
+    setKv(s.db,'gap_affected:T:w2',false,s.at);
+    expect(diagnose(unpack(pack(f)))).toEqual(d);
+    expect(diagnose(s.freeze()).wallets.find(w=>w.wallet==='w2')?.costState).toBe('unverified_cost');
+  });
+  it('reports remaining full-rule blockers and marks legacy wallet attribution explicitly',async()=>{
+    const {exploreResearch}=await import('../src/research/exploration.js');
+    const s=await setup();s.db.prepare('UPDATE tokens SET market_cap=1').run();reserveResearch(s.d);await collectResearch(s.d);
+    const report=exploreResearch(s.db,research,s.at);
+    const cohort=report.factors.find(f=>f.experiment.parameter==='validVotes'&&f.experiment.value===2)!.cohorts[0]!;
+    expect(cohort).toMatchObject({factorPass:1,fullPass:0,remainingBlockers:{marketCap:{label:'代币市值',count:1}}});
+    expect(report.walletAttribution).toMatchObject({observations:3,clear:3,legacy:0});
+    const row=s.db.prepare('SELECT id,diagnostics FROM research_samples').get() as {id:number;diagnostics:string};
+    const legacy=JSON.parse(row.diagnostics);for(const w of legacy.wallets){delete w.behaviorReasons;delete w.dataReasons;delete w.costState;}
+    s.db.prepare('UPDATE research_samples SET diagnostics=? WHERE id=?').run(JSON.stringify(legacy),row.id);
+    expect(exploreResearch(s.db,research,s.at).walletAttribution).toMatchObject({observations:3,clear:0,legacy:3});
+  });
   it('reproduces production selection and remains immutable after cache mutations',async()=>{
     const s=await setup(),f=s.freeze(),d=diagnose(f);
     expect(d.eligible).toBe(true);expect(d.productionStatus).toBe('pass');expect(d.validVotes).toBe(3);
@@ -223,15 +247,29 @@ describe('active sampling and measurement remediation',()=>{
     s.setNow(s.at+901);s.d.gateway.fetchKline=async()=>({list:[{time:(s.at-60)*1000,close:1}]});await evaluateResearchOutcomes(s.d);
     expect(s.db.prepare('SELECT last_error,candle_count FROM research_outcomes WHERE horizon=300').get()).toEqual({last_error:'stale_candles',candle_count:1});
   });
-  it('keeps slots for old work while prioritizing fresh outcomes, and yields to new captures',async()=>{
+  it('prioritizes current retries by due time, and yields to new captures',async()=>{
     const {dueResearchOutcomes}=await import('../src/research/outcomes.js');
     const s=await setup();reserveResearch(s.d);await collectResearch(s.d);s.setNow(s.at+90000);
     s.d.research={...research,maxOutcomeBatch:2};
     s.db.prepare("UPDATE research_outcomes SET attempts=1,next_at=? WHERE horizon=300").run(s.at+300);
     const rows=dueResearchOutcomes(s.d,s.at+90000);expect(rows).toHaveLength(2);
-    expect(rows[0]?.attempts).toBe(0);expect(rows[1]?.horizon).toBe(300);
+    expect(rows[0]?.attempts).toBe(1);expect(rows[0]?.horizon).toBe(300);expect(rows[1]?.horizon).toBe(3600);
     s.d.gateway.fetchKline=vi.fn(async()=>{s.db.prepare("UPDATE research_samples SET state='pending'").run();return {list:[]};});
     await evaluateResearchOutcomes(s.d);expect(s.d.gateway.fetchKline).toHaveBeenCalledTimes(1);
+  });
+  it('reserves current-scope retry slots while draining older versions without duplicate work',async()=>{
+    const {dueResearchOutcomes}=await import('../src/research/outcomes.js');
+    const s=await setup();reserveResearch(s.d);await collectResearch(s.d);
+    s.db.prepare("UPDATE research_samples SET config_version='older-config'").run();
+    s.db.prepare('UPDATE research_outcomes SET next_at=0').run();
+    s.setNow(s.at+300);s.buy('w4',s.at+299);reserveResearch(s.d);await collectResearch(s.d);
+    const current=(s.db.prepare('SELECT MAX(id) id FROM research_samples').get() as {id:number}).id;
+    s.db.prepare('UPDATE research_outcomes SET attempts=1 WHERE sample_id=?').run(current);
+    s.d.research={...research,maxOutcomeBatch:2};
+    const rows=dueResearchOutcomes(s.d,s.at+90000);
+    expect(rows).toHaveLength(2);expect(rows[0]).toMatchObject({sample_id:current,attempts:1,horizon:300});
+    expect(rows[1]?.sample_id).not.toBe(current);
+    expect(new Set(rows.map(r=>`${r.sample_id}:${r.horizon}`)).size).toBe(2);
   });
   it('migrates old measurement columns idempotently',async()=>{
     const s=await setup();for(const name of ['last_error','checked_at','candle_count','latest_close_at'])s.db.exec(`ALTER TABLE research_outcomes DROP COLUMN ${name}`);

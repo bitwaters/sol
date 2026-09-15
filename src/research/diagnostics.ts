@@ -8,13 +8,15 @@ import { computeWindow } from '../signal/window.js';
 import { validateWallets } from '../signal/validate-wallet.js';
 import { validateTokenSnapshot } from '../signal/validate-token.js';
 import { getLatestCycle } from '../signal/positions.js';
+import { getKv } from '../store/db.js';
 import { restoreSnapshot, type FrozenSnapshot } from './snapshot.js';
 
 export interface RuleCheck { label: string; value: number | boolean | null; min?: number | null; max?: number | null;
   status: 'pass' | 'fail' | 'unknown' | 'na'; }
 export interface Diagnostics {
   windowStart?: number;
-  checks: Record<string, RuleCheck>; wallets: { wallet: string; cluster: string; reasons: string[] }[];
+  checks: Record<string, RuleCheck>; wallets: { wallet: string; cluster: string; reasons: string[];
+    behaviorReasons?:string[];dataReasons?:string[];costState?:string }[];
   rawVotes: number; validVotes: number; warn: boolean; strong: boolean; sources: string[]; complete: boolean; eligible: boolean;
   productionStatus: string; productionReason: string | null;
 }
@@ -101,8 +103,15 @@ export function diagnose(snapshot: FrozenSnapshot, config: AppConfig = snapshot.
       if (c && c.cycleStartedAt !== null && c.lastSellTs !== null && c.boughtAmount.gt(0)
         && c.lastSellTs - c.cycleStartedAt <= config.signalValidation.fastFlipMinutes * 60
         && c.soldAmount.div(c.boughtAmount).gte(config.signalValidation.fastFlipSellRatio)) reasons.push('快进快出');
-      if (!c || c.state !== 'open' || !c.costComplete) reasons.push('持仓成本不可核验');
-      return { wallet: w.wallet, cluster: clusters.clusterOf.get(w.wallet) ?? w.wallet, reasons };
+      const costState=c?.state==='closed'?'closed':!c?'position_missing':c.state==='unknown'?'position_unknown':
+        c.state==='incomplete'?'position_incomplete':c.costComplete?'verifiable':
+        getKv(db,`gap_affected:${token}:${w.wallet}`)===true?'gap_affected':'unverified_cost';
+      const costLabels:Record<string,string>={position_missing:'缺少持仓记录',position_unknown:'持仓起点未知',
+        position_incomplete:'持仓历史不完整',gap_affected:'历史缺口影响成本',unverified_cost:'缺少可靠成本起点'};
+      if(costLabels[costState])reasons.push(costLabels[costState]!);
+      const dataLabels=new Set(['缺少钱包画像','钱包画像过期','钱包创建时间未知',...Object.values(costLabels)]);
+      return { wallet: w.wallet, cluster: clusters.clusterOf.get(w.wallet) ?? w.wallet, reasons,costState,
+        dataReasons:reasons.filter(r=>dataLabels.has(r)),behaviorReasons:reasons.filter(r=>!dataLabels.has(r)) };
     });
     flag('freshWallets','钱包画像完整且新鲜',window.votingWallets.every(w => { const p = getWalletProfile(db,w);
       return p && p.walletCreatedAt !== null && fresh(p.refreshedAt,at,WALLET_PROFILE_TTL_SEC); }) ? true : null);

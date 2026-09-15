@@ -147,6 +147,12 @@ export class Poller {
     const minTs = sorted.length > 0 ? sorted[0]!.timestamp : null;
     const maxTs = sorted.length > 0 ? sorted[sorted.length - 1]!.timestamp : null;
     const prevWatermark = prev.watermark_ts;
+    // The confirmed watermark stays before a lost interval; latest-page overlap has a separate cursor.
+    const observedHead=prev.head_ts??(prev.gap_from_ts!==null
+      ? (db.prepare(`SELECT MAX(t.timestamp) ts FROM trades t JOIN trade_sources s ON s.event_id=t.event_id
+          WHERE s.source=? AND t.timestamp<=?`).get(source,nowSec) as {ts:number|null}).ts
+      : prevWatermark);
+    const priorHead = observedHead === null ? prevWatermark : Math.max(observedHead, prevWatermark ?? observedHead);
 
     // 重叠检测：找到本页中最早的一个"已入库"事件，作为回追点
     let reachBackTs: number | null = null;
@@ -160,6 +166,7 @@ export class Poller {
     const patch: Partial<SourceHealth> & { source: string } = {
       source,
       last_success_at: nowSec,
+      head_ts: maxTs===null?priorHead:Math.max(priorHead??maxTs,maxTs),
     };
     let gapDetected = false;
     let gapCovered = false;
@@ -171,28 +178,31 @@ export class Poller {
       patch.watermark_ts = maxTs;
     } else if (reachBackTs !== null && reachBackTs <= prevWatermark) {
       // 回追到水位之前 → 连续
-      patch.watermark_ts = Math.max(prevWatermark, maxTs ?? prevWatermark);
-      if (prev.gap_from_ts !== null) {
+      if(prev.gap_from_ts===null||maxTs!>=(prev.gap_to_ts??prevWatermark))
+        patch.watermark_ts = Math.max(prevWatermark, maxTs ?? prevWatermark,priorHead??prevWatermark);
+      if (prev.gap_from_ts !== null && maxTs!>=(prev.gap_to_ts??prevWatermark)) {
         patch.gap_from_ts = null;
         patch.gap_to_ts = null;
         gapCovered = true;
         logger.info('采集缺口已覆盖', { source, gapFrom: prev.gap_from_ts, reachBackTs });
       }
+    } else if(reachBackTs!==null&&priorHead!==null&&reachBackTs<=priorHead){
+      // Continuous since the last page. Preserve the earlier hole without extending it to the present.
     } else if (reachBackTs !== null) {
       // 部分重叠但未追到水位 → 缺口 [watermark, reachBackTs]
-      patch.gap_from_ts = prevWatermark;
-      patch.gap_to_ts = reachBackTs;
+      patch.gap_from_ts = prev.gap_from_ts??priorHead??prevWatermark;
+      patch.gap_to_ts = Math.max(prev.gap_to_ts??0,reachBackTs);
       gapDetected = true;
       logger.warn('采集存在缺口（部分重叠）', { source, watermark: prevWatermark, reachBackTs });
     } else if (fullPage) {
       // 整页全新且无重叠 → 可能漏数据（高流量溢出）
-      patch.gap_from_ts = prevWatermark;
-      patch.gap_to_ts = minTs;
+      patch.gap_from_ts = prev.gap_from_ts??priorHead??prevWatermark;
+      patch.gap_to_ts = Math.max(prev.gap_to_ts??0,minTs!);
       gapDetected = true;
       logger.warn('采集可能缺口（整页全新）', { source, watermark: prevWatermark, pageMinTs: minTs });
     } else {
       // 不满页且无重叠（罕见）：视为连续
-      patch.watermark_ts = Math.max(prevWatermark, maxTs ?? prevWatermark);
+      if(prev.gap_from_ts===null)patch.watermark_ts = Math.max(prevWatermark, maxTs ?? prevWatermark);
     }
 
     if (fullPage && !paginationStalled && (gapDetected || prev.gap_from_ts !== null)) {

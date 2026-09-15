@@ -3,6 +3,7 @@ import { deleteKv, getKv, setKv } from '../db.js';
 
 export interface SourceHealth {
   source: string;
+  head_ts: number | null;
   last_success_at: number | null;
   watermark_ts: number | null;
   gap_from_ts: number | null;
@@ -18,6 +19,7 @@ export function getSourceHealth(db: Db, source: string): SourceHealth {
   return (
     row ?? {
       source,
+      head_ts: null,
       last_success_at: null,
       watermark_ts: null,
       gap_from_ts: null,
@@ -42,9 +44,10 @@ export function upsertSourceHealth(
       updated_at: now,
     };
     db.prepare(
-      `INSERT INTO source_health (source, last_success_at, watermark_ts, gap_from_ts, gap_to_ts, backfill_cursor, updated_at)
-       VALUES (@source, @last_success_at, @watermark_ts, @gap_from_ts, @gap_to_ts, @backfill_cursor, @updated_at)
+      `INSERT INTO source_health (source, head_ts, last_success_at, watermark_ts, gap_from_ts, gap_to_ts, backfill_cursor, updated_at)
+       VALUES (@source, @head_ts, @last_success_at, @watermark_ts, @gap_from_ts, @gap_to_ts, @backfill_cursor, @updated_at)
        ON CONFLICT(source) DO UPDATE SET
+         head_ts = excluded.head_ts,
          last_success_at = excluded.last_success_at,
          watermark_ts = excluded.watermark_ts,
          gap_from_ts = excluded.gap_from_ts,
@@ -58,15 +61,18 @@ export function upsertSourceHealth(
         ON CONFLICT(source) WHERE state='open' DO UPDATE SET
         from_ts=MIN(from_ts,excluded.from_ts),to_ts=MAX(to_ts,excluded.to_ts)`)
         .run(patch.source, next.gap_from_ts, next.gap_to_ts, now);
-      // 立即撤销所有在持仓周期的完整性，不能等候选评估才传播缺口。
-      const affected = db.prepare("SELECT DISTINCT wallet, token FROM wallet_positions WHERE state IN ('open','unknown','incomplete')")
-        .all() as Array<{ wallet: string; token: string }>;
-      for (const { wallet, token } of affected) {
-        setKv(db, `gap_affected:${token}:${wallet}`, true, now);
-        const key = `gap_affected_until:${token}:${wallet}`;
-        setKv(db, key, Math.max(getKv<number>(db, key) ?? 0, next.gap_to_ts), now);
+      // A heartbeat with the same gap must not re-scan/revoke thousands of positions.
+      if(current.gap_from_ts===null||current.gap_to_ts===null||next.gap_from_ts<current.gap_from_ts||next.gap_to_ts>current.gap_to_ts){
+        const relevant="state IN ('open','unknown','incomplete') AND (cycle_started_at IS NULL OR cycle_started_at<=?)";
+        db.prepare(`INSERT INTO kv(key,value,updated_at)
+          SELECT 'gap_affected:'||token||':'||wallet,'true',? FROM wallet_positions WHERE ${relevant}
+          ON CONFLICT(key) DO UPDATE SET value='true',updated_at=excluded.updated_at`).run(now,next.gap_to_ts);
+        db.prepare(`INSERT INTO kv(key,value,updated_at)
+          SELECT 'gap_affected_until:'||token||':'||wallet,CAST(? AS TEXT),? FROM wallet_positions WHERE ${relevant}
+          ON CONFLICT(key) DO UPDATE SET value=CAST(MAX(CAST(kv.value AS INTEGER),CAST(excluded.value AS INTEGER)) AS TEXT),updated_at=excluded.updated_at`)
+          .run(next.gap_to_ts,now,next.gap_to_ts);
+        db.prepare(`UPDATE wallet_positions SET cost_complete=0,confidence=0.3 WHERE ${relevant}`).run(next.gap_to_ts);
       }
-      db.prepare("UPDATE wallet_positions SET cost_complete = 0, confidence = 0.3 WHERE state IN ('open','unknown','incomplete')").run();
       if (current.gap_from_ts === null || getKv(db, gapKey) === null) {
         setKv(db, gapKey, now, now);
       }
