@@ -22,15 +22,15 @@ const nowOf = (d: ResearchDeps) => Math.floor((d.now?.() ?? Date.now()) / 1000);
 export function reserveResearch(d: ResearchDeps): number {
   const { db,research } = d, now = nowOf(d);
   if (!research.enabled || now - (getKv<number>(db,'research_last_sample') ?? 0) < research.intervalSec) return 0;
-  const candidates = db.prepare(`SELECT base_address token,COUNT(DISTINCT maker) votes FROM trades
+  const candidates = db.prepare(`SELECT base_address token,COUNT(DISTINCT CASE WHEN amount_usd_num>=? THEN maker END) votes FROM trades
     WHERE chain='sol' AND side='buy' AND timestamp BETWEEN ? AND ? AND amount_usd_num>0
     GROUP BY base_address HAVING MAX(timestamp)>=?`)
-    .all(now-Math.min(d.config.signal.windowMinutes,research.windowMinutes)*60,now,
+    .all(d.config.tradeFilter.minTradeAmountUsd,now-Math.min(d.config.signal.windowMinutes,research.windowMinutes)*60,now,
       now-research.activeWithinSec) as { token: string; votes: number }[];
   const queued = (db.prepare("SELECT COUNT(*) n FROM research_samples WHERE state='pending'").get() as {n:number}).n;
   let capacity = Math.max(0,research.maxPending-queued);
   const version = `${RESEARCH_VERSION}:${d.researchVersion}`;
-  const groups = [1,2,3,4,5].map(stratum => {
+  const groups = [0,1,2,3,4,5].map(stratum => {
     const rows = candidates.filter(c=>Math.min(c.votes,5)===stratum).sort((a,b)=>{
       const hash = (token:string) => createHash('sha256').update(`${version}:${now}:${token}`).digest('hex');
       return hash(a.token).localeCompare(hash(b.token));
@@ -38,9 +38,9 @@ export function reserveResearch(d: ResearchDeps): number {
     return { stratum,rows,selected: [] as typeof rows };
   });
   // Rotate allocation order to avoid starving large-vote strata when the queue is nearly full.
-  const offset = Math.floor(now/research.intervalSec)%5;
-  for(let round=0;round<research.maxPerStratum;round++) for(let i=0;i<5;i++) {
-    const g=groups[(i+offset)%5]!;if(capacity>0&&g.rows[round]) {g.selected.push(g.rows[round]!);capacity--;}
+  const offset = Math.floor(now/research.intervalSec)%groups.length;
+  for(let round=0;round<research.maxPerStratum;round++) for(let i=0;i<groups.length;i++) {
+    const g=groups[(i+offset)%groups.length]!;if(capacity>0&&g.rows[round]) {g.selected.push(g.rows[round]!);capacity--;}
   }
   let selected=0;
   db.transaction(()=>{
@@ -59,27 +59,44 @@ export function reserveResearch(d: ResearchDeps): number {
   return selected;
 }
 const running = new WeakSet<Db>();
+interface Progress {profiles:WalletProfile[];info?:{raw:unknown;at:number};security?:{raw:unknown;at:number};}
+const progressByDb=new WeakMap<Db,Map<number,Progress>>();
 export async function collectResearch(d: ResearchDeps) {
   if (!d.research.enabled || running.has(d.db)) return;
   running.add(d.db);
+  let progress=progressByDb.get(d.db);if(!progress){progress=new Map();progressByDb.set(d.db,progress);}
   try {
-    const rows = d.db.prepare("SELECT id,token,selected_at,initial FROM research_samples WHERE state='pending' ORDER BY id LIMIT ?")
+    const rows = d.db.prepare("SELECT id,token,selected_at,initial FROM research_samples WHERE state='pending' ORDER BY selected_at,stratum DESC,id LIMIT ?")
       .all(d.research.maxPerBatch) as {id:number;token:string;selected_at:number;initial:Buffer}[];
     for(const row of rows) {
+      const saved=progress.get(row.id)??{profiles:[]};progress.set(row.id,saved);
       let frozen=unpack(row.initial), error:string|null=null;
       if(nowOf(d)-row.selected_at<=120) {
         const isolated=restoreSnapshot(frozen);
         try {
-          const profiles:WalletProfile[]=[];
+          const profiles=saved.profiles;
           const recentMakers = isolated.prepare(`SELECT maker FROM trades WHERE side='buy' AND timestamp>=?
             GROUP BY maker ORDER BY MAX(CASE WHEN amount_usd_num>=? THEN 1 ELSE 0 END) DESC,MAX(timestamp) DESC,maker`)
             .all(frozen.at-d.config.signal.windowMinutes*60,d.config.tradeFilter.minTradeAmountUsd) as {maker:string}[];
           const missing=recentMakers.map(r=>r.maker).filter(w=>{const p=getWalletProfile(isolated,w);return !p||!fresh(p.refreshedAt,frozen.at,WALLET_PROFILE_TTL_SEC);});
-          for(const wallet of missing.slice(0,d.research.maxWalletRefresh)) {
+          for(const wallet of missing.slice(0,d.research.maxWalletRefresh).filter(w=>!profiles.some(p=>p.address===w))) {
             const started=nowOf(d),raw=await d.gateway.fetchWalletStats(wallet);
             profiles.push(...parseWalletStats(raw).filter(p=>p.address===wallet).map(p=>({...p,refreshedAt:started})));
           }
-          const quote=await enrichToken(isolated,d.gateway,row.token,{now:d.now,persist:false,logger:d.logger});
+          // A busy security request must not discard an already completed info/profile request.
+          // Cached responses keep their original timestamps; they never become a newer live price.
+          const memo=async(key:'info'|'security',fetch:()=>Promise<unknown>)=>{
+            const old=saved[key];if(old&&nowOf(d)-old.at<=60)return old.raw;
+            const at=nowOf(d),raw=await fetch();saved[key]={at,raw};return raw;
+          };
+          const callAt=nowOf(d);
+          const quote=await enrichToken(isolated,{
+            fetchTokenInfo:()=>memo('info',()=>d.gateway.fetchTokenInfo(row.token)),
+            fetchTokenSecurity:()=>memo('security',()=>d.gateway.fetchTokenSecurity(row.token)),
+          },row.token,{now:()=>callAt*1000,persist:false,logger:d.logger});
+          if(saved.info)for(const key of ['priceUpdatedAt','basicUpdatedAt','riskUpdatedAt'] as const)
+            if(quote[key]===callAt)quote[key]=saved.info.at;
+          if(saved.security&&quote.riskUpdatedAt!==null)quote.riskUpdatedAt=Math.min(quote.riskUpdatedAt,saved.security.at);
           if(nowOf(d)-row.selected_at<=120) frozen=freezeSnapshot(d.db,row.token,nowOf(d),d.config,d.research,d.blacklist,quote,profiles);
           else error='capture_deadline';
         } catch(e) {
@@ -96,6 +113,7 @@ export async function collectResearch(d: ResearchDeps) {
         for(const horizon of [300,3600,86400]) d.db.prepare(`INSERT OR IGNORE INTO research_outcomes(sample_id,horizon,state,next_at) VALUES (?,?,?,?)`)
           .run(row.id,horizon,live?'pending':'missing_baseline',frozen.at+horizon);
       })();
+      progress.delete(row.id);
     }
   } finally {running.delete(d.db);}
 }

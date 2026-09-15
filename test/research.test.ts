@@ -179,6 +179,23 @@ it('background wallet enrichment can acquire weight three without exceeding a ca
 });
 
 describe('active sampling and measurement remediation',()=>{
+  it('reserves a low-amount control stratum and separates candidates with qualified buyers',async()=>{
+    const s=await setup();s.db.prepare("UPDATE trades SET base_address='low',amount_usd='100',amount_usd_num=100 WHERE maker='w3'").run();
+    expect(reserveResearch(s.d)).toBe(2);
+    expect(s.db.prepare('SELECT token,stratum FROM research_samples ORDER BY stratum').all()).toEqual([{token:'low',stratum:0},{token:'T',stratum:2}]);
+  });
+  it('preserves successful enrichment across background yields without advancing its price timestamp',async()=>{
+    const s=await setup();s.db.prepare('DELETE FROM tokens').run();s.db.prepare('UPDATE wallets SET refreshed_at=0').run();
+    s.d.gateway.fetchWalletStats=vi.fn(async(address:string)=>({wallet_address:address,common:{created_at:s.at-30*86400,tags:[]}}));
+    s.d.gateway.fetchTokenInfo=vi.fn(s.deps.gateway.fetchTokenInfo);
+    const security=s.deps.gateway.fetchTokenSecurity;
+    s.d.gateway.fetchTokenSecurity=vi.fn().mockRejectedValueOnce(new BackgroundBusyError()).mockImplementation(security);
+    reserveResearch(s.d);await collectResearch(s.d);expect(s.db.prepare('SELECT state FROM research_samples').get()).toEqual({state:'pending'});
+    s.setNow(s.at+30);await collectResearch(s.d);
+    expect(s.d.gateway.fetchTokenInfo).toHaveBeenCalledTimes(1);expect(s.d.gateway.fetchWalletStats).toHaveBeenCalledTimes(2);
+    expect(s.db.prepare('SELECT state,anchor_at,price_at FROM research_samples').get()).toEqual({state:'ready',anchor_at:s.at+30,price_at:s.at});
+    expect(s.db.prepare('SELECT COUNT(*) n FROM tokens').get()).toEqual({n:0});
+  });
   it('ignores dormant tokens and stratifies only the production window while retaining older history',async()=>{
     const s=await setup();s.db.prepare('UPDATE trades SET timestamp=?').run(s.at-1000);
     expect(reserveResearch(s.d)).toBe(0);

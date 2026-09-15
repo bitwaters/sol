@@ -26,7 +26,7 @@ function weightedMedian(rows:{value:number;weight:number}[]){const sorted=[...ro
   for(const row of sorted){n+=row.weight;if(n>=half)return row.value;}return null;}
 export function researchOverview(db:Db,now=Math.floor(Date.now()/1000)){
   const counts=db.prepare('SELECT state,COUNT(*) n FROM research_samples GROUP BY state').all();
-  const strata=db.prepare('SELECT stratum,COUNT(*) samples,COUNT(DISTINCT token) tokens FROM research_samples GROUP BY stratum').all();
+  const strata=db.prepare('SELECT research_version,stratum,COUNT(*) samples,COUNT(DISTINCT token) tokens FROM research_samples GROUP BY research_version,stratum').all();
   const totals=db.prepare('SELECT COUNT(*) samples,COUNT(DISTINCT token) tokens FROM research_samples').get();
   const rules:Record<string,{label:string;pass:number;fail:number;unknown:number;na:number}>={},walletReasons:Record<string,number>={};
   for(const row of db.prepare('SELECT diagnostics FROM research_samples WHERE diagnostics IS NOT NULL').iterate() as Iterable<{diagnostics:string}>){
