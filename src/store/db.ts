@@ -22,6 +22,8 @@ export function applySchema(db: Db): void {
       signals: { send_snapshot: 'TEXT', display_wallets: 'TEXT' },
       position_checkpoints: { cycle_started_at: 'INTEGER', last_buy_ts: 'INTEGER', last_sell_ts: 'INTEGER' },
       signal_wallets: { joined_at: 'INTEGER', joined_event_id: 'TEXT', active: 'INTEGER NOT NULL DEFAULT 1' },
+      research_outcomes: { last_error: 'TEXT', checked_at: 'INTEGER', candle_count: 'INTEGER', latest_close_at: 'INTEGER' },
+      research_experiments: { scope: 'TEXT' },
     })) {
       const existing = new Set(
         (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((c) => c.name),

@@ -8,6 +8,8 @@
   "maxSnapshotTrades": 5000,
   "maxSnapshotWallets": 100,
   "windowMinutes": 60,
+  "activeWithinSec": 120,
+  "maxOutcomeBatch": 8,
   "minIndependentTokens": 20,
   "minPerCell": 20,
   "baselineCoverage": 0.95,

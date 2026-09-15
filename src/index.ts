@@ -1,4 +1,5 @@
 import { createResearchSchedule } from './research/scheduler.js';
+import { advanceResearchExperiments } from './research/exploration.js';
 import { captureDelivery } from './research/delivery.js';
 import { loadResearchConfig } from './research/config.js';
 import { reserveResearch, collectResearch } from './research/collector.js';
@@ -82,6 +83,7 @@ async function main(): Promise<void> {
     run: async (token) => {
       const result = await evaluateToken(engineDeps, token);
       runtimeMetrics.observe(`evaluation.result.${result.status}`, 0);
+      if(result.reason)runtimeMetrics.observe(`evaluation.reason.${result.reason.split('(')[0]}`,0);
     },
     onError: (token, error) => log.error('候选评估失败', { token, error }),
   });
@@ -189,7 +191,10 @@ async function main(): Promise<void> {
   const measurementGateway = gateway.background();
   const researchDeps = { ...engineDeps, gateway: measurementGateway, research: research.config, researchVersion: research.version };
   const measurementSchedule = createResearchSchedule({
-    collect: () => collectResearch(researchDeps),
+    collect: async () => {
+      await collectResearch(researchDeps);
+      advanceResearchExperiments(db,research.config);
+    },
     pending: () => research.config.enabled && Boolean(db.prepare("SELECT 1 FROM research_samples WHERE state='pending' LIMIT 1").get()),
     backgroundJobs: [
       () => evaluateResearchOutcomes(researchDeps),

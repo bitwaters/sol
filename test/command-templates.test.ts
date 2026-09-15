@@ -91,6 +91,8 @@ it('status renders source names, UTC dates, empty data and uncertain/exhausted q
 
 it('reason labels cover dynamic thresholds, token ranges, nested rechecks and safe unknown values', () => {
   expect(reasonLabel('send_recheck:votes_below_min(2)')).toBe('发送前复核：有效票数不足（当前 2 票）');
+  expect(reasonLabel('raw_votes_below_min(2)')).toBe('过滤前聚类票数不足（当前 2 票）');
+  expect(reasonLabel('raw_addresses_below_min(1)')).toBe('达到买入金额门槛的钱包数不足（当前 1 个）');
   expect(reasonLabel('holding_ratio_below_min(0.3456)')).toContain('34.56%');
   expect(reasonLabel('price_above_entry(2.30x)')).toContain('2.3 倍');
   for (const field of ['age', 'market_cap', 'holder_count', 'liquidity', 'top10', 'bundler', 'insider', 'entrapment', 'bot_degen', 'fresh_wallet', 'dev_hold', 'sniper_count']) {

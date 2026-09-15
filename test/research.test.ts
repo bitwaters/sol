@@ -63,7 +63,7 @@ describe('research sampling and budget',()=>{
   });
   it('records capacity-limited selection probability and never exceeds pending limit',async()=>{
     const s=await setup();s.d.research={...research,maxPending:1};expect(reserveResearch(s.d)).toBe(1);
-    s.setNow(s.at+research.intervalSec);expect(reserveResearch(s.d)).toBe(0);
+    s.setNow(s.at+research.intervalSec);s.buy('w4',s.at+research.intervalSec);expect(reserveResearch(s.d)).toBe(0);
     const runs=s.db.prepare('SELECT universe,selected FROM research_runs ORDER BY id').all();expect(runs).toEqual([{universe:1,selected:1},{universe:1,selected:0}]);
   });
   it('does not refresh foreground profiles or quotes',async()=>{
@@ -176,4 +176,80 @@ it('background wallet enrichment can acquire weight three without exceeding a ca
   const gateway=new GmgnGateway({client:{getWalletStats} as never,limiter:bucket,banGate:new BanGate()});
   await gateway.background().fetchWalletStats('test-wallet');
   expect(getWalletStats).toHaveBeenCalledTimes(1);expect(bucket.available).toBeGreaterThanOrEqual(2);expect(bucket.available).toBeLessThan(3);
+});
+
+describe('active sampling and measurement remediation',()=>{
+  it('ignores dormant tokens and stratifies only the production window while retaining older history',async()=>{
+    const s=await setup();s.db.prepare('UPDATE trades SET timestamp=?').run(s.at-1000);
+    expect(reserveResearch(s.d)).toBe(0);
+    s.setNow(s.at+300);s.buy('active',s.at+299);
+    expect(reserveResearch(s.d)).toBe(1);
+    const row=s.db.prepare('SELECT stratum,initial FROM research_samples').get() as {stratum:number;initial:Buffer};
+    expect(row.stratum).toBe(1);expect(unpack(row.initial).tables.trades).toHaveLength(4);
+  });
+  it('uses first observations within the new version without rewriting old failed samples',async()=>{
+    const s=await setup();reserveResearch(s.d);await collectResearch(s.d);
+    s.db.prepare("UPDATE research_samples SET state='unavailable',research_version='old'").run();
+    s.setNow(s.at+300);s.buy('w4',s.at+299);reserveResearch(s.d);await collectResearch(s.d);
+    const r=compareResearch(s.db,{parameter:'validVotes',value:2},research,s.at+7200);
+    expect(r.cohorts.reduce((n,c)=>n+c.selected,0)).toBe(1);expect(r.freshCoverage).toBe(1);
+    expect(s.db.prepare("SELECT state FROM research_samples WHERE research_version='old'").get()).toEqual({state:'unavailable'});
+  });
+  it('classifies missing endpoints without accepting future prices or treating network failure as no market',async()=>{
+    const s=await setup();reserveResearch(s.d);await collectResearch(s.d);s.setNow(s.at+301);
+    s.d.gateway.fetchKline=vi.fn(async()=>({list:[{time:(s.at+300)*1000,close:2}]}));await evaluateResearchOutcomes(s.d);
+    expect(s.db.prepare('SELECT state,last_error,attempts FROM research_outcomes WHERE horizon=300').get())
+      .toEqual({state:'pending',last_error:'future_only',attempts:1});
+    expect(s.d.gateway.fetchKline).toHaveBeenCalledWith('T','1m',(s.at-120)*1000,(s.at+420)*1000);
+    s.setNow(s.at+601);s.d.gateway.fetchKline=async()=>{throw new Error('private request detail');};await evaluateResearchOutcomes(s.d);
+    expect(s.db.prepare('SELECT last_error,attempts FROM research_outcomes WHERE horizon=300').get()).toEqual({last_error:'request_error',attempts:1});
+    s.setNow(s.at+901);s.d.gateway.fetchKline=async()=>({list:[{time:(s.at-60)*1000,close:1}]});await evaluateResearchOutcomes(s.d);
+    expect(s.db.prepare('SELECT last_error,candle_count FROM research_outcomes WHERE horizon=300').get()).toEqual({last_error:'stale_candles',candle_count:1});
+  });
+  it('keeps slots for old work while prioritizing fresh outcomes, and yields to new captures',async()=>{
+    const {dueResearchOutcomes}=await import('../src/research/outcomes.js');
+    const s=await setup();reserveResearch(s.d);await collectResearch(s.d);s.setNow(s.at+90000);
+    s.d.research={...research,maxOutcomeBatch:2};
+    s.db.prepare("UPDATE research_outcomes SET attempts=1,next_at=? WHERE horizon=300").run(s.at+300);
+    const rows=dueResearchOutcomes(s.d,s.at+90000);expect(rows).toHaveLength(2);
+    expect(rows[0]?.attempts).toBe(0);expect(rows[1]?.horizon).toBe(300);
+    s.d.gateway.fetchKline=vi.fn(async()=>{s.db.prepare("UPDATE research_samples SET state='pending'").run();return {list:[]};});
+    await evaluateResearchOutcomes(s.d);expect(s.d.gateway.fetchKline).toHaveBeenCalledTimes(1);
+  });
+  it('migrates old measurement columns idempotently',async()=>{
+    const s=await setup();for(const name of ['last_error','checked_at','candle_count','latest_close_at'])s.db.exec(`ALTER TABLE research_outcomes DROP COLUMN ${name}`);
+    s.db.exec('ALTER TABLE research_experiments DROP COLUMN scope');applySchema(s.db);applySchema(s.db);
+    expect((s.db.prepare('PRAGMA table_info(research_outcomes)').all() as {name:string}[]).map(r=>r.name)).toContain('last_error');
+  });
+});
+describe('sample-count experiment progression',()=>{
+  it('scalar exploration matches full replay, including other simultaneous failures',async()=>{
+    const {researchPlan,classifyThreshold}=await import('../src/research/exploration.js');
+    const s=await setup();
+    for(const changed of [false,true]){
+      s.db.prepare('UPDATE wallets SET tags=? WHERE address=?').run(JSON.stringify(changed?['scammer']:['smart_degen']),'w3');
+      const f=s.freeze(),d=diagnose(f);
+      for(const p of researchPlan)for(const value of p.values){const e={parameter:p.parameter,value};expect(classifyThreshold(d,e).eligible).toBe(replay(f,e).eligible);}
+      expect(classifyThreshold(d,{parameter:'validVotes',value:2}).eligible).toBe(true);
+    }
+    s.db.prepare('UPDATE tokens SET market_cap=1').run();const d=diagnose(s.freeze());
+    expect(classifyThreshold(d,{parameter:'validVotes',value:2})).toMatchObject({factorPass:true,eligible:false});
+  });
+  it('waits for training counts, freezes an idempotent boundary, and requires future holdout counts',async()=>{
+    const {advanceResearchExperiments}=await import('../src/research/exploration.js');
+    const s=await setup();reserveResearch(s.d);await collectResearch(s.d);
+    expect(advanceResearchExperiments(s.db,research,s.at+3600)).toEqual([]);
+    s.db.prepare('DELETE FROM research_outcomes').run();s.db.prepare('DELETE FROM research_samples').run();
+    const insert=s.db.prepare(`INSERT INTO research_samples(run_id,token,selected_at,anchor_at,stratum,probability,config_version,rules_version,research_version,state,baseline,frozen,diagnostics)
+      VALUES (1,?,?,?,3,1,'c','r',?,'ready','1',?,?)`);
+    function add(from:number,to:number){for(let i=from;i<to;i++){
+      s.db.prepare('UPDATE wallets SET tags=? WHERE address=?').run(JSON.stringify(i%2?['scammer']:['smart_degen']),'w3');
+      const f=s.freeze(),id=Number(insert.run(`unique-${i}`,s.at+i,s.at+i,RESEARCH_VERSION,pack(f),JSON.stringify(diagnose(f))).lastInsertRowid);
+      s.db.prepare("INSERT INTO research_outcomes(sample_id,horizon,state,next_at,ratio) VALUES (?,3600,'ready',?,1.1)").run(id,s.at+i+3600);
+    }}
+    add(0,40);const registrations=advanceResearchExperiments(s.db,research,s.at+4000);expect(registrations).toHaveLength(1);
+    const r=registrations[0]!;expect(compareResearch(s.db,r.definition,research,s.at+4000,r.id).ready).toBe(false);
+    add(40,80);const again=advanceResearchExperiments(s.db,research,s.at+4400);expect(again[0]?.id).toBe(r.id);expect(again[0]?.boundary).toBe(r.boundary);
+    expect(compareResearch(s.db,r.definition,research,s.at+4400,r.id).ready).toBe(true);
+  });
 });

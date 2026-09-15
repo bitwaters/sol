@@ -13,6 +13,7 @@ import { restoreSnapshot, type FrozenSnapshot } from './snapshot.js';
 export interface RuleCheck { label: string; value: number | boolean | null; min?: number | null; max?: number | null;
   status: 'pass' | 'fail' | 'unknown' | 'na'; }
 export interface Diagnostics {
+  windowStart?: number;
   checks: Record<string, RuleCheck>; wallets: { wallet: string; cluster: string; reasons: string[] }[];
   rawVotes: number; validVotes: number; warn: boolean; strong: boolean; sources: string[]; complete: boolean; eligible: boolean;
   productionStatus: string; productionReason: string | null;
@@ -111,7 +112,7 @@ export function diagnose(snapshot: FrozenSnapshot, config: AppConfig = snapshot.
     // Input quality is independent of a rule-derived metric being unavailable (e.g. no eligible cost basis).
     const inputKeys=['ageMinutes','marketCap','holders','liquidity','top10','bundler','insider','entrapment','bot','freshWallet','devHold','snipers','mint','freeze','positionTime'];
     const complete = inputKeys.every(k=>checks[k]!.status!=='unknown') && checks.freshToken!.status === 'pass' && checks.freshWallets!.status === 'pass';
-    return { checks, wallets: details, rawVotes: window.votes, validVotes, warn: ratio !== null && ratio > config.signalValidation.warnPriceAboveEntry, strong: validVotes >= config.signal.strongWallets,
+    return { windowStart: window.windowStart, checks, wallets: details, rawVotes: window.votes, validVotes, warn: ratio !== null && ratio > config.signalValidation.warnPriceAboveEntry, strong: validVotes >= config.signal.strongWallets,
       sources: [...new Set(window.wallets.flatMap(w=>w.sources))].sort(), complete,
       eligible: Object.values(checks).every(c=>c.status==='pass'||c.status==='na'),
       productionStatus: original.status !== 'pass' ? original.status : tokenResult?.status ?? 'deferred',

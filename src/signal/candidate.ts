@@ -394,7 +394,7 @@ export async function revalidateSignalForSend(
   );
   const win = computeWindow(db, signal.token, now, config, clusters);
   if (win.votes < config.signal.minDistinctWallets) {
-    return { ok: false, reason: `votes_below_min(${win.votes})` };
+    return { ok: false, reason: `raw_votes_below_min(${win.votes})` };
   }
   const walletResult = validateWallets({
     db,
@@ -600,7 +600,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
       WHERE base_address=? AND side='buy' AND timestamp>=? AND timestamp<=?
         AND amount_usd_num>=?`).get(token, now - config.signal.windowMinutes * 60, now,
           config.tradeFilter.minTradeAmountUsd) as { wallets: number };
-    if (raw.wallets < config.signal.minDistinctWallets) return base;
+    if (raw.wallets < config.signal.minDistinctWallets) return {...base,reason:`raw_addresses_below_min(${raw.wallets})`};
   }
 
   // 富化（失败 → suppressed）
@@ -688,7 +688,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
 
   if (win.votes < config.signal.minDistinctWallets && pushed === null) {
     if (existing) {
-      const reason = `votes_below_min(${win.votes})`;
+      const reason = `raw_votes_below_min(${win.votes})`;
       updateSignalIfReusable(db, existing.id, { status: 'invalidated', reason });
       evaluate(existing.id, 'wallet_layer', 'fail', reason, { votes: win.votes });
       return {

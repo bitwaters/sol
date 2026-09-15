@@ -57,6 +57,8 @@ export function reasonLabel(raw: string | null): string {
   const numeric = parsedNumber !== null && Number.isFinite(parsedNumber) ? parsedNumber : null;
   let label = ownLabel(reasons, key);
   if (key === 'votes_below_min') label = `有效票数不足${numeric === null ? '' : `（当前 ${numeric} 票）`}`;
+  if (key === 'raw_votes_below_min') label = `过滤前聚类票数不足${numeric === null ? '' : `（当前 ${numeric} 票）`}`;
+  if (key === 'raw_addresses_below_min') label = `达到买入金额门槛的钱包数不足${numeric === null ? '' : `（当前 ${numeric} 个）`}`;
   if (key === 'verifiable_below_min') label = `可核验持仓的钱包不足${numeric === null ? '' : `（当前 ${numeric} 个）`}`;
   if (key === 'holding_ratio_below_min') label = `共识持仓保留率不足${numeric === null ? '' : `（当前 ${(numeric * 100).toFixed(2)}%）`}`;
   if (key === 'price_above_entry' || key === 'price_warn') label = `${key === 'price_warn' ? '触发追高警告' : '价格超过追高拦截阈值'}${numeric === null ? '' : `（现价为共识均价的 ${numeric} 倍）`}`;

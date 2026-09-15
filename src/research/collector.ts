@@ -23,8 +23,10 @@ export function reserveResearch(d: ResearchDeps): number {
   const { db,research } = d, now = nowOf(d);
   if (!research.enabled || now - (getKv<number>(db,'research_last_sample') ?? 0) < research.intervalSec) return 0;
   const candidates = db.prepare(`SELECT base_address token,COUNT(DISTINCT maker) votes FROM trades
-    WHERE chain='sol' AND side='buy' AND timestamp BETWEEN ? AND ? AND amount_usd_num>0 GROUP BY base_address`)
-    .all(now-research.windowMinutes*60,now) as { token: string; votes: number }[];
+    WHERE chain='sol' AND side='buy' AND timestamp BETWEEN ? AND ? AND amount_usd_num>0
+    GROUP BY base_address HAVING MAX(timestamp)>=?`)
+    .all(now-Math.min(d.config.signal.windowMinutes,research.windowMinutes)*60,now,
+      now-research.activeWithinSec) as { token: string; votes: number }[];
   const queued = (db.prepare("SELECT COUNT(*) n FROM research_samples WHERE state='pending'").get() as {n:number}).n;
   let capacity = Math.max(0,research.maxPending-queued);
   const version = `${RESEARCH_VERSION}:${d.researchVersion}`;
@@ -69,8 +71,9 @@ export async function collectResearch(d: ResearchDeps) {
         const isolated=restoreSnapshot(frozen);
         try {
           const profiles:WalletProfile[]=[];
-          const recentMakers = isolated.prepare("SELECT DISTINCT maker FROM trades WHERE side='buy' AND timestamp>=?")
-            .all(frozen.at-d.research.windowMinutes*60) as {maker:string}[];
+          const recentMakers = isolated.prepare(`SELECT maker FROM trades WHERE side='buy' AND timestamp>=?
+            GROUP BY maker ORDER BY MAX(CASE WHEN amount_usd_num>=? THEN 1 ELSE 0 END) DESC,MAX(timestamp) DESC,maker`)
+            .all(frozen.at-d.config.signal.windowMinutes*60,d.config.tradeFilter.minTradeAmountUsd) as {maker:string}[];
           const missing=recentMakers.map(r=>r.maker).filter(w=>{const p=getWalletProfile(isolated,w);return !p||!fresh(p.refreshedAt,frozen.at,WALLET_PROFILE_TTL_SEC);});
           for(const wallet of missing.slice(0,d.research.maxWalletRefresh)) {
             const started=nowOf(d),raw=await d.gateway.fetchWalletStats(wallet);

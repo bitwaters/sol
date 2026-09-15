@@ -287,12 +287,13 @@ CREATE TABLE IF NOT EXISTS research_outcomes (
   sample_id INTEGER NOT NULL REFERENCES research_samples(id), horizon INTEGER NOT NULL,
   state TEXT NOT NULL DEFAULT 'pending', ratio REAL, candle_at INTEGER,
   attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL,
-  path TEXT, PRIMARY KEY(sample_id,horizon)
+  path TEXT, last_error TEXT, checked_at INTEGER, candle_count INTEGER, latest_close_at INTEGER,
+  PRIMARY KEY(sample_id,horizon)
 );
 CREATE INDEX IF NOT EXISTS idx_research_outcomes_due ON research_outcomes(state,next_at);
 CREATE TABLE IF NOT EXISTS research_experiments (
   id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, definition TEXT NOT NULL,
-  boundary_id INTEGER NOT NULL
+  boundary_id INTEGER NOT NULL, scope TEXT
 );
 CREATE TABLE IF NOT EXISTS research_delivery_frames (
   id INTEGER PRIMARY KEY, captured_at INTEGER NOT NULL, digest TEXT NOT NULL UNIQUE,

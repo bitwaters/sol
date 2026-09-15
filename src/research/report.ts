@@ -6,12 +6,21 @@ import type { Diagnostics } from './diagnostics.js';
 import { unpack } from './snapshot.js';
 import { replay, variant, type Experiment } from './replay.js';
 
-interface Sample {id:number;token:string;selected_at:number;anchor_at:number|null;stratum:number;probability:number;
+export interface Sample {id:number;token:string;selected_at:number;anchor_at:number|null;stratum:number;probability:number;
   config_version:string;rules_version:string;research_version:string;state:string;baseline:string|null;
-  frozen:Buffer|null;diagnostics:string|null;ratio:number|null;outcomeState:string|null;}
+  frozen:Buffer|null;hasSnapshot:number;diagnostics:string|null;ratio:number|null;outcomeState:string|null;}
 function samples(db:Db):Sample[]{return db.prepare(`SELECT s.id,s.token,s.selected_at,s.anchor_at,s.stratum,s.probability,s.config_version,s.rules_version,s.research_version,
-  s.state,s.baseline,NULL frozen,s.diagnostics,o.ratio,o.state outcomeState FROM research_samples s
+  s.state,s.baseline,NULL frozen,(s.frozen IS NOT NULL) hasSnapshot,s.diagnostics,o.ratio,o.state outcomeState FROM research_samples s
   LEFT JOIN research_outcomes o ON o.sample_id=s.id AND o.horizon=3600 ORDER BY s.selected_at,s.id`).all() as Sample[];}
+export interface ResearchScope {config_version:string;rules_version:string;research_version:string;}
+export function latestResearchScope(db:Db):ResearchScope|null {
+  return db.prepare('SELECT config_version,rules_version,research_version FROM research_samples ORDER BY id DESC LIMIT 1').get() as ResearchScope|undefined ?? null;
+}
+export function firstResearchSamples(db:Db,scope:ResearchScope|null=latestResearchScope(db)):Sample[] {
+  const rows=samples(db).filter(r=>!scope||(r.config_version===scope.config_version&&r.rules_version===scope.rules_version&&r.research_version===scope.research_version));
+  const first=new Map<string,Sample>();for(const row of rows)if(!first.has(row.token))first.set(row.token,row);
+  return [...first.values()];
+}
 function median(values:number[]){const a=[...values].sort((a,b)=>a-b),i=Math.floor(a.length/2);return !a.length?null:a.length%2?a[i]!:(a[i-1]!+a[i]!)/2;}
 function weightedMedian(rows:{value:number;weight:number}[]){const sorted=[...rows].sort((a,b)=>a.value-b.value);let n=0;const half=sorted.reduce((s,r)=>s+r.weight,0)/2;
   for(const row of sorted){n+=row.weight;if(n>=half)return row.value;}return null;}
@@ -36,13 +45,26 @@ export function researchOverview(db:Db,now=Math.floor(Date.now()/1000)){
   const errors=db.prepare('SELECT error,COUNT(*) n FROM research_samples WHERE error IS NOT NULL GROUP BY error').all();
   const deliveryFrames=db.prepare('SELECT COUNT(*) total,SUM(CASE WHEN frame IS NOT NULL THEN 1 ELSE 0 END) available FROM research_delivery_frames').get();
   const storage=db.prepare('SELECT SUM(COALESCE(length(initial),0)+COALESCE(length(frozen),0)) bytes FROM research_samples').get();
-  return {totals,counts,strata,selection,horizons,rules,walletReasons,errors,deliveryFrames,storage,
+  const versions=db.prepare(`SELECT research_version,COUNT(*) samples,COUNT(DISTINCT token) tokens,
+    SUM(state='ready') baselineReady,SUM(json_array_length(json_extract(diagnostics,'$.sources'))=0) emptyWindow
+    FROM research_samples GROUP BY research_version`).all();
+  const outcomeStates=db.prepare(`SELECT horizon,state,COALESCE(last_error,CASE WHEN state='exhausted' THEN 'legacy_unclassified' ELSE 'none' END) reason,
+    COUNT(*) n,SUM(state='pending' AND next_at<=?) due FROM research_outcomes GROUP BY horizon,state,reason`).all(now);
+  return {totals,counts,strata,selection,horizons,rules,walletReasons,errors,deliveryFrames,storage,versions,outcomeStates,
     scope:'仅已观测SOL交易；分层抽样、重复观察不等于独立代币；缺失与失败分开统计。'};
 }
 export function researchLines(db:Db):string[]{
   const r=researchOverview(db),total=r.totals as {samples:number;tokens:number};
   if(!total.samples)return ['🔬 宽范围研究：尚无样本（按样本数量准入，无天数门槛）'];
+  const scope=latestResearchScope(db),current=firstResearchSamples(db,scope);
+  const states=r.outcomeStates as {state:string;reason:string;n:number;due:number}[];
+  const reasons:Record<string,string>={empty_response:'无返回行情',stale_candles:'目标附近行情过旧',future_only:'仅有目标之后行情',
+    malformed_response:'响应结构异常',invalid_candles:'行情字段异常',invalid_ratio:'收益计算异常',request_error:'请求失败',background_busy:'后台让路',legacy_unclassified:'旧版缺失原因未分类'};
+  const missing=new Map<string,number>();for(const s of states)if(s.reason!=='none')missing.set(s.reason,(missing.get(s.reason)??0)+s.n);
   return ['🔬 宽范围研究（独立于正式推送；无天数门槛）',`样本 ${total.samples} 条 / 独立代币 ${total.tokens} 个`,
+    `当前版本：${current.length} 个首次入选代币 / 基线可用 ${current.filter(s=>s.state==='ready').length} 个`,
+    `待补行情：${states.filter(s=>s.state==='pending').reduce((n,s)=>n+s.n,0)} 项（已到重试时间 ${states.reduce((n,s)=>n+s.due,0)} 项）`,
+    ...[...missing].map(([reason,n])=>`· ${reasons[reason]??'其他测量异常'}：${n} 项`),
     ...r.horizons.map(h=>`${h.horizon===300?'5分钟':h.horizon===3600?'1小时':'24小时'}：到期 ${h.mature} / 有效 ${h.valid}（${h.uniqueTokens}币）/ 覆盖 ${h.coverage===null?'—':(h.coverage*100).toFixed(0)+'%'}`),
     ...Object.values(r.rules).filter(v=>v.fail||v.unknown).map(v=>`· ${v.label}：未通过 ${v.fail} / 数据不足 ${v.unknown}`),
     ...Object.entries(r.walletReasons).map(([k,v])=>`· ${k}：${v} 次（可重叠）`)];
@@ -52,18 +74,22 @@ export function registerExperiment(db:Db,experiment:Experiment,now=Math.floor(Da
   const example=db.prepare('SELECT frozen FROM research_samples WHERE frozen IS NOT NULL ORDER BY id DESC LIMIT 1').get() as {frozen:Buffer}|undefined;
   if(!example)throw new Error('need_snapshot_before_registering');
   variant(unpack(example.frozen).config,experiment);
-  const definition=JSON.stringify(experiment),id=createHash('sha256').update(`${now}:${definition}`).digest('hex').slice(0,16);
+  const definition=JSON.stringify(experiment),scope=latestResearchScope(db),scopeText=JSON.stringify(scope);
+  const existing=db.prepare('SELECT id,boundary_id FROM research_experiments WHERE definition=? AND scope=? ORDER BY created_at LIMIT 1')
+    .get(definition,scopeText) as {id:string;boundary_id:number}|undefined;
+  if(existing)return {id:existing.id,definition:experiment,boundary:existing.boundary_id,scope,holdout:'注册后本版本首次入选的代币'};
+  const id=createHash('sha256').update(`${now}:${definition}:${scopeText}`).digest('hex').slice(0,16);
   const boundary=(db.prepare('SELECT COALESCE(MAX(id),0) n FROM research_samples').get() as {n:number}).n;
-  db.prepare('INSERT INTO research_experiments(id,created_at,definition,boundary_id) VALUES (?,?,?,?)').run(id,now,definition,boundary);
-  return {id,definition:experiment,boundary,holdout:'注册后新入选且此前未出现的代币'};
+  db.prepare('INSERT INTO research_experiments(id,created_at,definition,boundary_id,scope) VALUES (?,?,?,?,?)').run(id,now,definition,boundary,scopeText);
+  return {id,definition:experiment,boundary,scope,holdout:'注册后本版本首次入选的代币'};
 }
 export function compareResearch(db:Db,experiment:Experiment,config:ResearchConfig=loadResearchConfig().config,now=Math.floor(Date.now()/1000),experimentId?:string){
-  const all=samples(db);
-  const registered=experimentId?db.prepare('SELECT * FROM research_experiments WHERE id=?').get(experimentId) as {definition:string;boundary_id:number}|undefined:undefined;
+  const registered=experimentId?db.prepare('SELECT * FROM research_experiments WHERE id=?').get(experimentId) as {definition:string;boundary_id:number;scope:string|null}|undefined:undefined;
   if(experimentId&&!registered)throw new Error('experiment_not_found');
   if(registered&&registered.definition!==JSON.stringify(experiment))throw new Error('experiment_definition_changed');
   // First selection, including failed/missing ones, fixes each token's split and inclusion. No winner replacement.
-  const unique=[...new Map([...all].reverse().map(r=>[r.token,r])).values()].sort((a,b)=>a.id-b.id);
+  const scope:ResearchScope|null=registered ? registered.scope ? JSON.parse(registered.scope) as ResearchScope : null : latestResearchScope(db);
+  const unique=firstResearchSamples(db,scope).sort((a,b)=>a.id-b.id);
   const boundary=registered?.boundary_id??unique[Math.max(0,Math.ceil(unique.length*.7)-1)]?.id??0;
   const cohorts=new Map<string,Sample[]>();
   for(const row of unique){
@@ -107,7 +133,7 @@ export function compareResearch(db:Db,experiment:Experiment,config:ResearchConfi
         removed:evaluated.filter(e=>e.base&&!e.alternative).length,neither:evaluated.filter(e=>e.group==='neither').length}};
   });
   const freshCoverage=unique.length?unique.filter(r=>r.state==='ready').length/unique.length:0;
-  return {experiment,effect:experiment.parameter==='warnPriceRatio'?'警告分类':experiment.parameter==='strongWallets'?'强信号分类':'入选资格',experimentId:experimentId??null,ready:freshCoverage>=config.baselineCoverage&&reports.some(r=>r.ready),freshCoverage,boundary,cohorts:reports,
+  return {experiment,scope,effect:experiment.parameter==='warnPriceRatio'?'警告分类':experiment.parameter==='strongWallets'?'强信号分类':'入选资格',experimentId:experimentId??null,ready:freshCoverage>=config.baselineCoverage&&reports.some(r=>r.ready),freshCoverage,boundary,cohorts:reports,
     gates:{minIndependentTokens:config.minIndependentTokens,minPerCell:config.minPerCell,baselineCoverage:config.baselineCoverage,outcomeCoverage:config.outcomeCoverage,minimumDays:null},
     limitation:'同一已观测候选时点的条件比较；按首次选择去重，概率权重仅描述抽样对象；无成交容量模型，不证明可实现收益。'};
 }
