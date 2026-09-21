@@ -39,6 +39,7 @@ function fixture() {
       `INSERT INTO signal_wallets(signal_id,wallet,cycle_no,cluster_id,joined_version,joined_at,joined_event_id)
        VALUES (?,'w',?,'c0',?,?,?)`,
     ).run(id, cycle, joinedVersion, anchor ? now + offset : null, anchor ?? null);
+    if(status==='pushed')db.prepare('UPDATE signals SET tg_message_id=? WHERE id=?').run(id,id);
     return id;
   }
   const binding = (id: number) => (db.prepare('SELECT cycle_no FROM signal_wallets WHERE signal_id = ?').get(id) as { cycle_no: number }).cycle_no;

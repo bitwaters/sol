@@ -4,17 +4,17 @@ import { measureAsync, runtimeMetrics } from '../ops/metrics.js';
 import { measureTelegram } from './telemetry.js';
 import { TelegramDeliveryUnknownError } from './types.js';
 import type { CexBlacklist } from '../enrich/wallet.js';
-import { countOtherExitedClusters } from './exit-monitor.js';
-import { boundHoldingRatio, closedBoundClusters } from '../signal/members.js';
+import { exitChanges, runExitMonitor } from './exit-monitor.js';
+import { publishedState, updateMessage } from './updates.js';
+import { utcTime } from './labels.js';
+import { boundHoldingRatio } from '../signal/members.js';
 import { Decimal } from 'decimal.js';
 import type { AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
 import { getKv, setKv, type Db } from '../store/db.js';
 import {
   buildKeyboard,
-  formatExitAlert,
   formatSignalMessage,
-  type ExitView,
   type FormatWallet,
   type SignalView,
 } from './format.js';
@@ -32,6 +32,7 @@ export interface PusherDeps {
   logger: Logger;
   now?: () => number;
   /** 发送前完整资格复核（返回最新发送数据，ok=false 时取消任务） */
+  revalidateUpdate?: (signalId:number) => Promise<{ok:boolean;reason?:string;priceRatio?:number|null;holdingRatio?:number|null;votes?:number;warn?:boolean;partialHoldings?:boolean}>;
   revalidate?: (signalId: number) => Promise<{
     ok: boolean;
     reason?: string;
@@ -77,6 +78,7 @@ interface SignalRow {
   price_ratio: number | null;
   message_revision: number;
   tg_message_id: number | null;
+  tg_chat_id: string | null;
   snapshot: string | null;
   display_wallets: string | null;
   sent_at: number | null;
@@ -198,28 +200,6 @@ export function loadSignalView(db: Db, signalId: number, nowSec: number): Signal
   };
 }
 
-function loadExitView(db: Db, task: TaskRow, nowSec: number): ExitView | null {
-  const view = loadSignalView(db, task.signal_id, nowSec);
-  if (!view) return null;
-  const payload = parseJson<{
-    exitedClusters?: number;
-    clusterBreakdown?: Array<{ label: string; count: number }>;
-  }>(task.payload, {});
-  return {
-    signalId: view.signalId,
-    token: view.token,
-    symbol: view.symbol,
-    launchpad: view.launchpad,
-    tokenAgeMinutes: view.tokenAgeMinutes,
-    exitedClusters: payload.exitedClusters ?? 1,
-    clusterBreakdown: payload.clusterBreakdown ?? [{ label: '共识', count: payload.exitedClusters ?? 1 }],
-    retentionRatio: view.retentionRatio,
-    priceRatio: view.priceRatio,
-    currentPrice: view.currentPrice,
-    avgEntryPrice: view.avgEntryPrice,
-  };
-}
-
 function inQuietHours(config: AppConfig, nowSec: number): boolean {
   const date = new Date(nowSec * 1000);
   const minutes = date.getUTCHours() * 60 + date.getUTCMinutes();
@@ -242,7 +222,7 @@ function isMuted(db: Db, token: string, nowSec: number): boolean {
 /**
  * push_tasks 执行器（M3-2/M3-4/M3-5）：
  * - 状态机：pending → sending → sent / unknown / failed / cancelled
- * - 优先级：退出提醒 > 新信号/升级；退出提醒不占限流额度
+ * - 优先级：退出状态 > 后续提示 > 首次信号；首次消息永不编辑
  * - 静默时段只放行强信号；暂停只影响新信号/升级
  * - 发送成功回调按任务类型区分（仅 kind=signal 写原信号发送信息）
  */
@@ -271,6 +251,8 @@ export class Pusher {
     const { db, config, logger } = this.deps;
     const nowSec = Math.floor(this.now() / 1000);
     const result: PushRunResult = { processed: 0, sent: 0, deferred: 0, cancelled: 0, failed: 0 };
+
+    runExitMonitor({db,config,logger,now:this.now,...(this.deps.blacklist?{blacklist:this.deps.blacklist}:{})});
 
     // 重启/崩溃恢复：卡在 sending 超过 10s 的任务转 unknown（可重试）
     db.prepare(
@@ -380,6 +362,7 @@ export class Pusher {
           partialHoldings?: boolean;
           downgraded?: boolean;
           evaluatedAt?: number;
+          reason?: string;
         }>(task.payload, {});
 
         // 发送前复核（按任务类型）
@@ -469,6 +452,38 @@ export class Pusher {
           this.cancelTask(task, nowSec, 'stale_revision');
           return 'cancelled';
         }
+        if (task.kind === 'escalate') {
+          if(signal.status!=='pushed'||signal.tg_message_id===null||signal.sent_at===null||nowSec-signal.sent_at>86400){
+            this.cancelTask(task,nowSec,'no_active_original');return 'cancelled';
+          }
+          if(exitChanges(db,config,signal.id,nowSec,this.deps.blacklist).keys.length){
+            this.cancelTask(task,nowSec,'merged_into_exit');return 'cancelled';
+          }
+          const check=this.deps.revalidateUpdate?await this.deps.revalidateUpdate(signal.id):null;
+          nowSec=Math.floor(this.now()/1000);
+          const current=db.prepare('SELECT message_revision,escalated_count FROM signals WHERE id=?').get(signal.id) as {message_revision:number;escalated_count:number};
+          if(current.message_revision!==task.revision){this.cancelTask(task,nowSec,'stale_revision');return 'cancelled';}
+          if(exitChanges(db,config,signal.id,nowSec,this.deps.blacklist).keys.length){
+            this.cancelTask(task,nowSec,'merged_into_exit');return 'cancelled';
+          }
+          const currentView=loadSignalView(db,signal.id,nowSec);
+          if(!currentView){this.cancelTask(task,nowSec,'view_missing');return 'cancelled';}
+          if(check?.votes!==undefined)currentView.votes=check.votes;
+          if(check?.holdingRatio!==undefined)currentView.retentionRatio=check.holdingRatio;
+          if(check?.priceRatio!==undefined)currentView.priceRatio=check.priceRatio;
+          const reason=check?(check.ok?(check.warn?`price_warn(${check.priceRatio??0}x)`:null):check.reason??'token_recheck_failed'):(payload.downgraded?payload.reason??'wallet_invalid':null);
+          const update=updateMessage(currentView,publishedState(db,signal.id),reason,nowSec,config.signal.strongWallets);
+          if(!update.changed){this.cancelTask(task,nowSec,'unchanged_state');return 'cancelled';}
+          if(getKv(db,'paused')===true){db.prepare("UPDATE push_tasks SET status='pending',updated_at=? WHERE id=?").run(nowSec,task.id);return 'deferred';}
+          const sent=await sender.sendMessage(signal.tg_chat_id??chatId,update.text,{reply_parameters:{message_id:signal.tg_message_id},disable_web_page_preview:true});
+          nowSec=Math.floor(this.now()/1000);
+          db.transaction(()=>{
+            db.prepare("UPDATE push_tasks SET status='sent',tg_message_id=?,attempts=attempts+1,updated_at=? WHERE id=?").run(sent.message_id,nowSec,task.id);
+            setKv(db,`published_state:${signal.id}`,update.state,nowSec);
+            setKv(db,`published_member_version:${signal.id}`,current.escalated_count??0,nowSec);
+          })();
+          logger.info('信号状态提示已发送',{signalId:signal.id,revision:task.revision});return 'sent';
+        }
         const view = loadSignalView(db, task.signal_id, nowSec);
         if (!view) {
           this.cancelTask(task, nowSec, 'view_missing');
@@ -483,8 +498,8 @@ export class Pusher {
           {
             ...view,
             windowMinutes: config.signal.windowMinutes,
-            upgraded: task.kind === 'escalate' && !payload.downgraded,
-            downgraded: payload.downgraded === true,
+            upgraded: false,
+            downgraded: false,
             partialHoldings: payload.partialHoldings ?? false,
           },
           { links: config.push.links, buyButton: config.push.buyButton, strongWallets: config.signal.strongWallets, warnPriceAboveEntry: config.signalValidation.warnPriceAboveEntry },
@@ -507,14 +522,16 @@ export class Pusher {
               `UPDATE push_tasks SET status = 'sent', tg_message_id = ?, attempts = attempts + 1, updated_at = ? WHERE id = ?`,
             ).run(sent.message_id, nowSec, task.id);
             db.prepare(
-              `UPDATE signals SET status = 'pushed', tg_message_id = ?, sent_at = ?, price_at_send = ?,
+              `UPDATE signals SET status = 'pushed', tg_chat_id = ?, tg_message_id = ?, sent_at = ?, price_at_send = ?,
                  outcome_5m=NULL, outcome_1h=NULL, outcome_24h=NULL, send_snapshot=? WHERE id = ?`,
-            ).run(sent.message_id, nowSec, view.currentPrice, JSON.stringify({
-              votes: view.votes, priceRatio: view.priceRatio,
+            ).run(chatId, sent.message_id, nowSec, view.currentPrice, JSON.stringify({
+              votes: view.votes, holdingRatio:view.retentionRatio, priceRatio: view.priceRatio,
               sources: [...new Set(view.wallets.flatMap(wallet => wallet.sources))].sort(),
               warn: view.priceRatio !== null && view.priceRatio > config.signalValidation.warnPriceAboveEntry,
               tokenMetrics: { createdAt: view.tokenAgeMinutes === null ? null : nowSec - view.tokenAgeMinutes * 60, marketCap: view.marketCap },
             }), task.signal_id);
+            setKv(db,`published_member_version:${signal.id}`,0,nowSec);
+            setKv(db,`published_state:${signal.id}`,{votes:view.votes,holding:view.retentionRatio,condition:'qualified',reason:null},nowSec);
             db.prepare('DELETE FROM sample_quality WHERE signal_id=?').run(task.signal_id);
             db.prepare('DELETE FROM outcome_quality WHERE signal_id=?').run(task.signal_id);
             const quoteTs = measurement.tokenMetrics?.priceUpdatedAt ?? null;
@@ -531,83 +548,36 @@ export class Pusher {
           });
           tx();
           logger.info('信号已推送', { signalId: task.signal_id, token: view.token });
-        } else {
-          if (signal.tg_message_id === null) {
-            this.cancelTask(task, nowSec, 'no_original_message');
-            return 'cancelled';
-          }
-          const editWindowSec = config.push.stopEditAfterMinutes * 60;
-          const sentAt = signal.sent_at ?? 0;
-          if (nowSec - sentAt > editWindowSec) {
-            // 超过编辑窗口：改为跟进消息，不动原消息
-            const followUp = await sender.sendMessage(chatId, text, {
-              parse_mode: 'HTML',
-              reply_markup: keyboard,
-              disable_web_page_preview: true,
-            });
-            db.prepare(
-              `UPDATE push_tasks SET status = 'sent', tg_message_id = ?, attempts = attempts + 1, updated_at = ? WHERE id = ?`,
-            ).run(followUp.message_id, nowSec, task.id);
-            logger.info('信号跟进消息已发送', { signalId: task.signal_id, revision: task.revision });
-          } else {
-            await sender.editMessageText(chatId, signal.tg_message_id, text, {
-              parse_mode: 'HTML',
-              reply_markup: keyboard,
-              disable_web_page_preview: true,
-            });
-            db.prepare(
-              `UPDATE push_tasks SET status = 'sent', attempts = attempts + 1, updated_at = ? WHERE id = ?`,
-            ).run(nowSec, task.id);
-            logger.info('信号已更新', { signalId: task.signal_id, revision: task.revision });
-          }
         }
         return 'sent';
       }
 
-      const exitSignal = db.prepare(`SELECT s.token, s.sent_at, t.created_at FROM signals s
-        LEFT JOIN tokens t ON t.address=s.token WHERE s.id=?`).get(task.signal_id) as
-        { token: string; sent_at: number | null; created_at: number | null } | undefined;
-      const exitNow = Math.floor(this.now() / 1000);
-      const monitoringExpired = !exitSignal || exitSignal.sent_at === null || exitNow - exitSignal.sent_at > 86400 ||
-        (exitSignal.created_at !== null && exitNow - exitSignal.created_at > 86400);
-      let stillEligible = false;
-      if (exitSignal && !monitoringExpired) {
-        if (task.alert_type === 'consensus_exit') {
-          stillEligible = config.signalValidation.postPushExitAlert.enabled &&
-            closedBoundClusters(db, task.signal_id) >= config.signalValidation.postPushExitAlert.minWallets;
-        } else if (task.alert_type === 'other_cluster_exit') {
-          const bound = db.prepare('SELECT wallet, cycle_no AS cycleNo FROM signal_wallets WHERE signal_id=?')
-            .all(task.signal_id) as Array<{ wallet: string; cycleNo: number }>;
-          stillEligible = config.exitAlerts.enabled && countOtherExitedClusters(db, config, exitSignal.token,
-            exitSignal.sent_at!, bound, this.deps.blacklist ?? { entries: new Map() }) >= config.exitAlerts.minWallets;
-        }
-      }
-      if (!stillEligible) {
-        this.cancelTask(task, exitNow, 'exit_conditions_changed');
-        db.prepare('DELETE FROM kv WHERE key = ?').run(`exit_done:${task.signal_id}`);
-        return 'cancelled';
-      }
-      // exit_alert：独立消息回复原信号，不覆盖原消息 ID
-      const signal = db
-        .prepare('SELECT tg_message_id FROM signals WHERE id = ?')
-        .get(task.signal_id) as { tg_message_id: number | null } | undefined;
-      const view = loadExitView(db, task, nowSec);
-      if (!view) {
-        this.cancelTask(task, nowSec, 'exit_view_missing');
-        return 'cancelled';
-      }
-      const sent = await sender.sendMessage(chatId, formatExitAlert(view), {
-        parse_mode: 'HTML',
-        ...(signal?.tg_message_id != null
-          ? { reply_parameters: { message_id: signal.tg_message_id } }
-          : {}),
-        disable_web_page_preview: true,
-      });
-      db.prepare(
-        `UPDATE push_tasks SET status = 'sent', tg_message_id = ?, attempts = attempts + 1, updated_at = ? WHERE id = ?`,
-      ).run(sent.message_id, nowSec, task.id);
-      logger.info('退出提醒已推送', { signalId: task.signal_id, alertType: task.alert_type });
-      return 'sent';
+      const signal=db.prepare('SELECT tg_message_id,tg_chat_id FROM signals WHERE id=?').get(task.signal_id) as {tg_message_id:number|null;tg_chat_id:string|null}|undefined;
+      const changes=exitChanges(db,config,task.signal_id,Math.floor(this.now()/1000),this.deps.blacklist);
+      if(!signal?.tg_message_id||!changes.keys.length){this.cancelTask(task,nowSec,'exit_conditions_changed');return 'cancelled';}
+      const view=loadSignalView(db,task.signal_id,nowSec);
+      if(!view){this.cancelTask(task,nowSec,'view_missing');return 'cancelled';}
+      const previous=publishedState(db,task.signal_id);
+      const pct=(v:number|null)=>v===null?'不可核验':`${(v*100).toFixed(0)}%`;
+      const text=[`${changes.corrections?'⚠️ 数据更正 / 退出状态':'🔴 退出提醒'} #${task.signal_id.toString(36).toUpperCase()}`,
+        ...(changes.consensus?[`本次新增共识退出：${changes.consensus} 簇`]:[]),
+        ...(changes.other?[`本次新增其他钱包退出：${changes.other} 簇`]:[]),
+        ...(changes.corrections?[`历史状态更正：${changes.corrections} 簇（清仓早于发布/加入，或时间不可核验）`]:[]),
+        `持仓保留率：${pct(previous.holding)} → ${pct(view.retentionRatio)}`,
+        `最新已知事件时间：${utcTime(changes.eventAt)}`,`确认时间：${utcTime(Math.floor(this.now()/1000))}`,
+        '本提示合并同轮相关变化，引用首次信号。'].join('\n');
+      const sent=await sender.sendMessage(signal.tg_chat_id??chatId,text,{reply_parameters:{message_id:signal.tg_message_id},disable_web_page_preview:true});
+      nowSec=Math.floor(this.now()/1000);
+      db.transaction(()=>{
+        db.prepare("UPDATE push_tasks SET status='sent',tg_message_id=?,payload=?,attempts=attempts+1,updated_at=? WHERE id=?")
+          .run(sent.message_id,JSON.stringify(changes),nowSec,task.id);
+        const known=getKv<string[]>(db,`exit_events:${task.signal_id}`)??[];
+        setKv(db,`exit_events:${task.signal_id}`,[...new Set([...known,...changes.keys])],nowSec);
+        setKv(db,`published_state:${task.signal_id}`,{votes:view.votes,holding:view.retentionRatio,condition:'exited',reason:null},nowSec);
+        db.prepare("UPDATE push_tasks SET status='cancelled',updated_at=? WHERE signal_id=? AND kind='escalate' AND status IN ('pending','failed','unknown')")
+          .run(nowSec,task.signal_id);
+      })();
+      logger.info('退出状态提示已推送',{signalId:task.signal_id});return 'sent';
     } catch (err) {
       nowSec = Math.floor(this.now() / 1000);
       const attempts = task.attempts + 1;

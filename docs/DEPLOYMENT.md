@@ -14,7 +14,7 @@
 
 首次只读联调先在本地执行 `node scripts/prepare-sea-env.mjs`，生成被 Git 忽略的 `data/deployment/sea.env`（权限 600）。该文件仅包含 GMGN API Key、签名私钥、限流参数和 `DRY_RUN=1`，不含 Telegram 凭证。本地确认授权传输范围后再经 SSH 安装到上述受限路径，不能把凭证提交 GitHub。
 
-正式推送获用户明确授权后，在本地执行 `node scripts/prepare-sea-env.mjs --live`。它只在部署文件中设定 `DRY_RUN=0`，并加入 `TG_BOT_TOKEN`、`TG_CHAT_ID`、`TG_ADMIN_IDS`、`TG_ALERT_CHAT_ID`；不会修改本地 `.env`。将该文件通过 SSH 原子替换到 `/etc/sol/sol.env` 后，以 Compose 重建容器加载配置，再检查 Bot 启动日志、paused 状态及目标聊天权限。不要用 `docker run --env-file` 直接加载此带引号的 dotenv 文件；一次性诊断可在 root 只读容器内挂载为 `/app/.env`，由 dotenv 解析，不放宽宿主机文件权限。
+正式推送获用户明确授权后，在本地执行 `node scripts/prepare-sea-env.mjs --live`。它只在部署文件中设定 `DRY_RUN=0`，并加入 `TG_BOT_TOKEN`、`TG_CHAT_ID`、`TG_ADMIN_IDS`；不会修改本地 `.env`。将该文件通过 SSH 原子替换到 `/etc/sol/sol.env` 后，以 Compose 重建容器加载配置，再检查 Bot 启动日志、paused 状态及目标聊天权限。不要用 `docker run --env-file` 直接加载此带引号的 dotenv 文件；一次性诊断可在 root 只读容器内挂载为 `/app/.env`，由 dotenv 解析，不放宽宿主机文件权限。
 
 首次部署将空目录检出 `origin/main`；若目录已有仓库，应核验远端地址和未提交改动，不能覆盖未知文件。凭证文件从本地传输，不通过 GitHub，也不在服务器上手改。联调沿用 `DRY_RUN=1`。
 
@@ -66,3 +66,7 @@ UTC 09:00 的自动备份使用 SQLite 在线备份，每批64页后让出执行
 ## 回滚
 
 记录部署前后 Git 提交和容器镜像。代码回滚也从本地生成回退提交推送 GitHub，再在 SEA 快进拉取部署。数据库应先备份并核验兼容性，不以旧代码覆盖数据库文件。
+
+### 2026-09-21 通知路由
+
+信号频道使用 `TG_CHAT_ID`。管理通知改为直接私发 `TG_ADMIN_IDS` 中的有效管理员用户 ID；管理员必须先私聊机器人。旧 `TG_ALERT_CHAT_ID` 即便与频道相同也不再被运行时使用，无需为本次升级复制凭证。运维发送失败不回退频道。首次信号不编辑；所有信号状态变更独立回复首次信号。部署验收只读核对目标类型、配置和运行状态，合成消息测试使用本地假发送器，避免在正式频道制造测试信号。

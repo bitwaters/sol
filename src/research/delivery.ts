@@ -31,7 +31,7 @@ export function captureDelivery(d:ResearchDeps){
     const related=db.prepare(`SELECT * FROM signals WHERE token IN (${tokens.map(()=>'?').join(',')}) ORDER BY id LIMIT 1001`).all(...tokens) as typeof signals;
     if(related.length>1000)throw new Error('frame_signal_limit');
     for(const snapshot of snapshots)for(const signal of related) {
-      const keys=['edit_last','warn','downgrade','partial','exit_done'].map(k=>`${k}:${signal.id}`);
+      const keys=['edit_last','warn','downgrade','partial','exit_done','exit_events','published_state','notification_reason','published_member_version'].map(k=>`${k}:${signal.id}`);
       snapshot.tables.kv!.push(...db.prepare(`SELECT * FROM kv WHERE key IN (${keys.map(()=>'?').join(',')})`).all(...keys) as typeof signals);
     }
     const relatedIds=related.map(s=>s.id!),relatedMarks=relatedIds.map(()=>'?').join(',');
@@ -58,7 +58,7 @@ export async function replayDelivery(data:Buffer,exp:DeliveryExperiment,transpor
     case 'quietMinVotes':config.push.quietHours.minWallets=exp.value;break;
     case 'ttl':config.signalValidation.signalTtlSeconds=exp.value;break;
     case 'editThrottle':config.push.editThrottleSec=exp.value;break;
-    case 'stopEditAfter':config.push.stopEditAfterMinutes=exp.value;break;
+    case 'stopEditAfter':throw new Error('original_signal_is_immutable');
     case 'cooldown':config.signal.cooldownMinutes=exp.value;break;
     case 'consensusExit':config.signalValidation.postPushExitAlert.minWallets=exp.value;break;
     case 'otherExit':config.exitAlerts.minWallets=exp.value;break;
@@ -98,7 +98,7 @@ export async function replayDelivery(data:Buffer,exp:DeliveryExperiment,transpor
       await evaluateToken(deps,snapshot.token);
     }
     if(exp.parameter==='consensusExit'||exp.parameter==='otherExit')runExitMonitor(deps);
-    const result=await new Pusher({...deps,chatId:'offline',revalidate:s=>revalidateSignalForSend(deps,s),sender:{
+    const result=await new Pusher({...deps,chatId:'offline',revalidate:s=>revalidateSignalForSend(deps,s),revalidateUpdate:s=>revalidateSignalForSend(deps,s,true),sender:{
       sendMessage:async()=>{fail();sends++;return {message_id:id++};},editMessageText:async()=>{fail();edits++;},
     }}).runOnce();
     const states=db.prepare('SELECT kind,status,COUNT(*) n FROM push_tasks GROUP BY kind,status').all();

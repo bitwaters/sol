@@ -1,5 +1,6 @@
 import { Bot, HttpError, type Context } from 'grammy';
-import { buildStatsReport, splitReportText } from '../backtest/report.js';
+import { researchSummary, researchDetails, RESEARCH_KEYBOARD } from '../research/summary.js';
+import { buildStatsReport, splitReportText, signalStatsSummary } from '../backtest/report.js';
 import type { AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
 import { setKv, type Db } from '../store/db.js';
@@ -79,7 +80,11 @@ export function createBot(token: string, deps: BotDeps): Bot {
     if (!isAdmin(ctx.from?.id, deps.adminIds)) {
       logger.warn('拒绝非管理员操作', { userId: ctx.from?.id, update: ctx.update.update_id });
       if (ctx.callbackQuery) await ctx.answerCallbackQuery('⛔ 仅授权管理员可操作').catch(() => undefined);
-      else if (ctx.chat) await ctx.reply('⛔ 仅授权管理员可使用此机器人。').catch(() => undefined);
+      else if (ctx.chat?.type === 'private') await ctx.reply('⛔ 仅授权管理员可使用此机器人。').catch(() => undefined);
+      return;
+    }
+    if (ctx.chat?.type !== 'private') {
+      if (ctx.callbackQuery) await ctx.answerCallbackQuery('请在机器人私聊中使用管理指令').catch(() => undefined);
       return;
     }
     await next();
@@ -89,7 +94,8 @@ export function createBot(token: string, deps: BotDeps): Bot {
     help: async ctx => { await ctx.reply(helpText(), { reply_markup: HELP_KEYBOARD }); },
     status: async ctx => { await ctx.reply(statusText(db, now())); },
     config: async ctx => { for (const text of splitReportText(configText(config))) await ctx.reply(text); },
-    stats: async ctx => { for (const text of splitReportText(buildStatsReport(db, config).text)) await ctx.reply(text); },
+    stats: async ctx => { await ctx.reply(signalStatsSummary(db,now()),{reply_markup:{inline_keyboard:[[{text:'详细统计',callback_data:'stats:details'}]]}}); },
+    research: async ctx => { await ctx.reply(researchSummary(db), {reply_markup:RESEARCH_KEYBOARD}); },
     wallets: async ctx => { await ctx.reply(walletsText(db, now())); },
     test: async ctx => { await ctx.reply('✅ 机器人在线，指令接收与回复正常。此测试不代表已产生合格信号或完成信号推送。'); },
   };
@@ -134,6 +140,16 @@ export function createBot(token: string, deps: BotDeps): Bot {
   bot.on('callback_query:data', async (ctx) => {
     const data = ctx.callbackQuery.data;
     const [action, token] = data.split(':');
+    if(action==='stats'&&token==='details'){
+      await ctx.answerCallbackQuery();
+      for(const text of splitReportText(buildStatsReport(db,config).text))await ctx.reply(text);
+      return;
+    }
+    if (action === 'research') {
+      await ctx.answerCallbackQuery();
+      for (const text of splitReportText(researchDetails(db,token))) await ctx.reply(text, {reply_markup:RESEARCH_KEYBOARD});
+      return;
+    }
     if (action === 'command') {
       const handler = token && Object.hasOwn(queries, token) ? queries[token] : undefined;
       await ctx.answerCallbackQuery(handler ? undefined : '此快捷按钮已失效，请使用 /help');

@@ -176,7 +176,6 @@ function findPushedSignal(
   db: Db,
   token: string,
   nowSec: number,
-  editMinutes: number,
 ): PushedRow | null {
   const row = db
     .prepare(
@@ -186,7 +185,7 @@ function findPushedSignal(
        WHERE token = ? AND status = 'pushed' AND sent_at >= ?
        ORDER BY id DESC LIMIT 1`,
     )
-    .get(token, nowSec - editMinutes * 60) as PushedRow | undefined;
+    .get(token, nowSec - 86400) as PushedRow | undefined;
   return row ?? null;
 }
 
@@ -207,6 +206,7 @@ function createEscalateTask(
       )
       .run(signalId, revision, `${signalId}:escalate:${revision}`, JSON.stringify(payload), nowSec, nowSec);
     if (res.changes > 0) {
+      setKv(db, `notification_reason:${signalId}`, payload['reason'] ?? null, nowSec);
       setKv(db, `warn:${signalId}`, payload['warn'] === true, nowSec);
       setKv(db, `downgrade:${signalId}`, payload['downgraded'] === true, nowSec);
       updateSignal(db, signalId, { message_revision: revision, ...patch });
@@ -358,6 +358,7 @@ function updateSignal(db: Db, id: number, patch: Record<string, unknown>): void 
 export async function revalidateSignalForSend(
   deps: EngineDeps,
   signalId: number,
+  updateOnly = false,
 ): Promise<{
   ok: boolean;
   reason?: string;
@@ -372,7 +373,7 @@ export async function revalidateSignalForSend(
   const signal = db.prepare('SELECT token, status FROM signals WHERE id = ?').get(signalId) as
     | { token: string; status: string }
     | undefined;
-  if (!signal || signal.status !== 'sending') return { ok: false, reason: 'not_sending' };
+  if (!signal || signal.status !== (updateOnly ? 'pushed' : 'sending')) return { ok: false, reason: 'not_sending' };
 
   const gaps = checkIntegrity(db, ['smartmoney', 'kol', 'follow'], now);
   if (gaps.blocked) return { ok: false, reason: 'integrity_gap' };
@@ -393,7 +394,7 @@ export async function revalidateSignalForSend(
     },
   );
   const win = computeWindow(db, signal.token, now, config, clusters);
-  if (win.votes < config.signal.minDistinctWallets) {
+  if (!updateOnly && win.votes < config.signal.minDistinctWallets) {
     return { ok: false, reason: `raw_votes_below_min(${win.votes})` };
   }
   const walletResult = validateWallets({
@@ -405,7 +406,9 @@ export async function revalidateSignalForSend(
     nowSec: now,
   });
   if (walletResult.status !== 'pass') {
-    return { ok: false, reason: walletResult.reason ?? 'wallet_invalid' };
+    return { ok:false,reason:walletResult.reason??'wallet_invalid',
+      votes:new Set(walletResult.validWallets.map(w=>clusters.clusterOf.get(w.wallet)??w.wallet)).size,
+      holdingRatio:updateOnly?boundHoldingRatio(db,signalId):walletResult.retentionRatio?.toNumber()??null };
   }
   const tokenResult = await validateToken({
     db,
@@ -424,10 +427,10 @@ export async function revalidateSignalForSend(
   const statusNow = db.prepare('SELECT triggered_at, status FROM signals WHERE id = ?').get(signalId) as
     | { triggered_at: number; status: string }
     | undefined;
-  if (!statusNow || statusNow.status !== 'sending') {
+  if (!statusNow || statusNow.status !== (updateOnly ? 'pushed' : 'sending')) {
     return { ok: false, reason: 'candidate_not_sending' };
   }
-  if (nowAfter - statusNow.triggered_at > 3600) {
+  if (!updateOnly && nowAfter - statusNow.triggered_at > 3600) {
     return { ok: false, reason: 'candidate_expired' };
   }
   const integrityNow = checkIntegrity(db, ['smartmoney', 'kol', 'follow'], nowAfter);
@@ -446,7 +449,7 @@ export async function revalidateSignalForSend(
     excludeFunderLabels: config.walletFilter.cluster.excludeFunderLabels,
   });
   const winNow = computeWindow(db, signal.token, nowAfter, config, clustersNow);
-  if (winNow.votes < config.signal.minDistinctWallets) {
+  if (!updateOnly && winNow.votes < config.signal.minDistinctWallets) {
     return { ok: false, reason: 'send_recheck_votes' };
   }
   const recheck = validateWallets({
@@ -458,20 +461,22 @@ export async function revalidateSignalForSend(
     nowSec: nowAfter,
   });
   if (recheck.status !== 'pass') {
-    return { ok: false, reason: recheck.reason ?? 'send_recheck_failed' };
+    return { ok:false,reason:recheck.reason??'send_recheck_failed',
+      votes:new Set(recheck.validWallets.map(w=>clustersNow.clusterOf.get(w.wallet)??w.wallet)).size,
+      holdingRatio:updateOnly?boundHoldingRatio(db,signalId):recheck.retentionRatio?.toNumber()??null };
   }
   const finalToken = validateTokenSnapshot({ db, config, gateway, token: signal.token, nowSec: nowAfter,
     validWallets: recheck.validWallets, logger: deps.logger }, tokenResult.snapshot!);
   if (finalToken.status !== 'pass' && finalToken.status !== 'warn') return { ok: false, reason: finalToken.reason ?? 'token_recheck_failed' };
   const effectiveVotesNow = new Set(recheck.validWallets.map((w) => clustersNow.clusterOf.get(w.wallet) ?? w.wallet)).size;
   // 尚未首次发送：显示成员和退出监控成员必须与本次完整复核一致。
-  db.transaction(() => {
+  if (!updateOnly) db.transaction(() => {
     db.prepare('DELETE FROM signal_wallets WHERE signal_id = ?').run(signalId);
     persistSignalWallets(db, signalId, signal.token, recheck.validWallets, clustersNow, 0, nowAfter);
     db.prepare('UPDATE signals SET net_inflow_usd = ?, display_wallets = ? WHERE id = ?').run(winNow.netInflowUsd.toNumber(), displayWallets(recheck.validWallets, clustersNow), signalId);
   })();
   return { ok: true, priceRatio: finalToken.priceRatio?.toNumber() ?? null,
-    holdingRatio: recheck.retentionRatio?.toNumber() ?? null, votes: effectiveVotesNow, warn: finalToken.warn,
+    holdingRatio: updateOnly ? boundHoldingRatio(db,signalId) : recheck.retentionRatio?.toNumber() ?? null, votes: effectiveVotesNow, warn: finalToken.warn,
     partialHoldings: recheck.verifiableCount < recheck.validWallets.length };
 }
 
@@ -565,7 +570,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
   let existing = findReusableSignal(db, token, now);
   let pushed = existing
     ? null
-    : findPushedSignal(db, token, now, config.push.stopEditAfterMinutes);
+    : findPushedSignal(db, token, now);
   if (
     !existing &&
     pushed === null &&
@@ -574,6 +579,10 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
     return { ...base, status: 'cooldown', reason: 'cooldown_active' };
   }
 
+  const notifyUnavailable = (reason:string):void => {
+    if(!pushed||getKv(db,`notification_reason:${pushed.id}`)===reason)return;
+    createEscalateTask(db,pushed.id,pushed.message_revision+1,{downgraded:true,reason,evaluatedAt:now},{},now);
+  };
   const evaluate = (
     signalId: number | null,
     stage: 'wallet_layer' | 'token_layer' | 'send_recheck',
@@ -622,6 +631,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
         reason: 'enrich_failed',
       };
     }
+    notifyUnavailable('enrich_failed');
     return { ...base, status: 'suppressed_enrich_failed', reason: 'enrich_failed' };
   }
 
@@ -654,13 +664,14 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
   try {
     tokenSnapshot = await measureAsync('evaluation.token_enrich', () => enrichToken(db, gateway, token, { logger, now: deps.now }));
   } catch {
+    notifyUnavailable('enrich_failed');
     return { ...base, status: 'suppressed_enrich_failed', signalId: existing?.id ?? null, reason: 'enrich_failed' };
   }
   now = Math.floor((deps.now?.() ?? Date.now()) / 1000);
   expireStaleCandidates(db, token, now, config.signal.windowMinutes, config.tradeFilter.minTradeAmountUsd);
   retriggerUntil = getKv<number>(db, `retrigger:${token}`) ?? 0;
   existing = findReusableSignal(db, token, now);
-  pushed = existing ? null : findPushedSignal(db, token, now, config.push.stopEditAfterMinutes);
+  pushed = existing ? null : findPushedSignal(db, token, now);
   if (!existing && !pushed && findPushedInCooldown(db, token, now, config.signal.cooldownMinutes)) {
     return { ...base, status: 'cooldown', reason: 'cooldown_active' };
   }
@@ -713,6 +724,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
   if (sources.size === 0) for (const s of ['smartmoney', 'kol', 'follow']) sources.add(s);
   const integrity = checkIntegrity(db, [...sources], now);
   if (integrity.blocked) {
+    notifyUnavailable('integrity_gap');
     if (existing) {
       evaluate(existing.id, 'wallet_layer', 'fail', 'integrity_gap', {
         gaps: integrity.recentGaps,
@@ -782,6 +794,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
   ).size;
   if (walletResult.status !== 'pass') {
     const deferred = walletResult.status === 'deferred';
+    if(deferred)notifyUnavailable(walletResult.reason??'wallet_invalid');
     if (!deferred && pushed === null) {
       updateSignalIfReusable(db, signalId, { status: 'invalidated', reason: walletResult.reason });
     }
@@ -806,10 +819,10 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
           db,
           pushed.id,
           pushed.message_revision + 1,
-          { downgraded: true },
+          { downgraded: true, reason: walletResult.reason, evaluatedAt: now },
           {
             wallet_count: effectiveVotes, display_wallets: nextDisplay,
-            net_inflow_usd: win.netInflowUsd.toNumber(),
+            net_inflow_usd: win.netInflowUsd.toNumber(), price_ratio: null,
             holding_ratio: walletResult.retentionRatio?.toNumber() ?? null,
           },
           now,
@@ -846,6 +859,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
 
   if (tokenResult.status === 'deferred' || tokenResult.status === 'invalidated') {
     const deferred = tokenResult.status === 'deferred';
+    if(deferred)notifyUnavailable(tokenResult.reason??'token_deferred');
     if (!deferred && pushed === null) {
       updateSignalIfReusable(db, signalId, {
         status: 'invalidated',
@@ -875,8 +889,8 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
           db,
           pushed.id,
           pushed.message_revision + 1,
-          { downgraded: true },
-          { wallet_count: effectiveVotes, display_wallets: nextDisplay, net_inflow_usd: win.netInflowUsd.toNumber() },
+          { downgraded: true, reason: tokenResult.reason, evaluatedAt: now },
+          { wallet_count: effectiveVotes, display_wallets: nextDisplay, net_inflow_usd: win.netInflowUsd.toNumber(), price_ratio:null, holding_ratio:null },
           now,
         );
         markEdited(db, pushed.id, false, now);
@@ -922,7 +936,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
         db,
         pushed.id,
         pushed.message_revision + 1,
-        { downgraded: true, priceRatio: tokenResult.priceRatio?.toString() ?? null },
+        { downgraded: true, reason:tokenResult.reason, evaluatedAt:now, priceRatio: tokenResult.priceRatio?.toString() ?? null },
         {
           wallet_count: effectiveVotes, display_wallets: nextDisplay,
           price_ratio: tokenResult.priceRatio?.toNumber() ?? null,

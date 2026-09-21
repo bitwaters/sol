@@ -1,4 +1,3 @@
-import { researchLines } from '../research/report.js';
 import { qualityOverview, qualityReportLines } from './quality-report.js';
 import { compareSamples } from './compare.js';
 import { reasonLabel, sourceLabel } from '../telegram/labels.js';
@@ -118,7 +117,7 @@ export function buildStatsReport(db: Db, config: AppConfig): StatsReport {
   const evaluated = pushedQuality.cohorts.reduce((sum, cohort) => sum + cohort.horizons[1]!.valid, 0);
   const coverage = matured > 0 ? evaluated / matured : 0;
 
-  const lines: string[] = [...researchLines(db), '', ...qualityReportLines(db)];
+  const lines: string[] = ['📊 正式信号统计', ...qualityReportLines(db)];
   lines.push('', '以下全量价格描述含不同数据版本，不用于验证参数。');
   lines.push('📈 信号表现（价格变化倍数，1.00x = 持平）');
   lines.push(
@@ -194,6 +193,7 @@ export interface DailyReportDeps {
   config: AppConfig;
   sender: TelegramApi;
   chatId: string;
+  summaryOnly?: boolean;
   logger?: { info(msg: string, fields?: Record<string, unknown>): void };
 }
 
@@ -217,6 +217,7 @@ export function splitReportText(text: string, limit = 4000): string[] {
 
 export async function sendDailyReport(deps: DailyReportDeps): Promise<StatsReport> {
   const report = buildStatsReport(deps.db, deps.config);
+  if(deps.summaryOnly) report.text = signalStatsSummary(deps.db);
   for (const text of splitReportText(report.text)) {
     await deps.sender.sendMessage(deps.chatId, text, { disable_web_page_preview: true });
   }
@@ -225,4 +226,15 @@ export async function sendDailyReport(deps: DailyReportDeps): Promise<StatsRepor
     control: report.controlCount,
   });
   return report;
+}
+
+/** Compact operational summary; detailed price diagnostics remain available separately. */
+export function signalStatsSummary(db:Db,now=Math.floor(Date.now()/1000)):string {
+  const row=db.prepare("SELECT COUNT(*) total,SUM(sent_at>=?) recent FROM signals WHERE sent_at IS NOT NULL").get(now-86400) as {total:number;recent:number|null};
+  const states=db.prepare("SELECT kind,COUNT(*) n FROM push_tasks WHERE status='sent' AND updated_at>=? GROUP BY kind").all(now-86400) as {kind:string;n:number}[];
+  const count=(kind:string)=>states.find(s=>s.kind===kind)?.n??0;
+  return ['📊 正式信号概览（近24小时）',`首次信号：${row.recent??0} 条 · 历史累计 ${row.total} 条`,
+    `状态变化提示：${count('escalate')} 条 · 退出/更正提示：${count('exit_alert')} 条`,
+    '首次信号保持原文，状态提示独立引用首次信号。',
+    '研究采样及调参进度请查看 /research；详细价格统计通过“详细统计”查看。'].join('\n');
 }

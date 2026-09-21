@@ -1,13 +1,15 @@
 import { createResearchSchedule } from './research/scheduler.js';
 import { advanceResearchExperiments } from './research/exploration.js';
 import { captureDelivery } from './research/delivery.js';
-import { loadResearchConfig } from './research/config.js';
+import { loadResearchConfig, RESEARCH_VERSION } from './research/config.js';
 import { reserveResearch, collectResearch } from './research/collector.js';
 import { evaluateResearchOutcomes } from './research/outcomes.js';
 import { repairBaselines } from './backtest/repair.js';
 import { EvaluationScheduler } from './signal/scheduler.js';
 import { runtimeMetrics } from './ops/metrics.js';
 import { evaluateOutcomes } from './backtest/evaluate.js';
+import { adminRecipients } from './telegram/routing.js';
+import { researchSummary } from './research/summary.js';
 import { sendDailyReport } from './backtest/report.js';
 import { backupDatabaseOnline, collectOpsAlerts, sendOpsAlerts } from './ops/alerts.js';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
@@ -51,6 +53,7 @@ async function main(): Promise<void> {
   setKv(db, 'runtime_metrics', null);
   setKv(db, 'enabled_sources', ['smartmoney', 'kol', ...(env.GMGN_PRIVATE_KEY ? ['follow'] : [])]);
   setKv(db, 'research_enabled', research.config.enabled);
+  setKv(db, 'active_research_scope', {config_version:loaded.configVersion,rules_version:loaded.rulesVersion,research_version:RESEARCH_VERSION+':'+research.version});
   // Preserve evidence of downtime before the first successful poll can advance its timestamp.
   recordSourceOutages(db, Math.floor(Date.now() / 1000));
 
@@ -282,7 +285,7 @@ async function main(): Promise<void> {
                   AND triggered_at >= ?)
               OR (status = 'pushed' AND sent_at >= ?)`,
         )
-        .all(nowSec - 3600, nowSec - config.push.stopEditAfterMinutes * 60) as Array<{ token: string }>;
+        .all(nowSec - 3600, nowSec - 86400) as Array<{ token: string }>;
       for (const { token } of candidates) scheduleEvaluation(token);
     } catch (err) {
       log.error('候选维护失败', { error: err });
@@ -303,12 +306,14 @@ async function main(): Promise<void> {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
+    const recipients = adminRecipients(adminIds, env.TG_CHAT_ID);
+    if (!recipients.length) log.error('未配置可用的管理员私聊目标，管理通知仅记录日志');
     const bot = createBot(env.TG_BOT_TOKEN, {
       db,
       config,
       logger: log.child({ module: 'bot' }),
       adminIds,
-      ...(env.TG_ALERT_CHAT_ID ? { alertChatId: env.TG_ALERT_CHAT_ID } : {}),
+
     });
     const sender = grammySender(bot);
     const pusher = new Pusher({
@@ -322,6 +327,7 @@ async function main(): Promise<void> {
       configVersion: loaded.configVersion,
       rulesVersion: loaded.rulesVersion,
       revalidate: (signalId) => revalidateSignalForSend(engineDeps, signalId),
+      revalidateUpdate: (signalId) => revalidateSignalForSend(engineDeps, signalId, true),
     });
     pushTimer = setInterval(() => {
       void pusher
@@ -336,32 +342,37 @@ async function main(): Promise<void> {
       const day = d.toISOString().slice(0, 10);
       if (d.getUTCHours() === 8 && lastReportDay !== day) {
         lastReportDay = day;
-        void sendDailyReport({
-          db,
-          config,
-          sender,
-          chatId: env.TG_CHAT_ID!,
-          logger: log.child({ module: 'daily-report' }),
-        }).catch((err: unknown) => { lastReportDay = ''; log.error('每日报告失败', { error: err }); });
+        void (async () => {
+          let failed=false;
+          for (const chatId of recipients) {
+            const key = `daily_private:${chatId}:${day}`;
+            if (getKv(db,key)) continue;
+            try {
+              if(!getKv(db,key+':stats')) {
+                await sendDailyReport({db,config,sender,chatId,summaryOnly:true,logger:log.child({module:'daily-report'})});
+                setKv(db,key+':stats',true);
+              }
+              await sender.sendMessage(chatId,researchSummary(db),{disable_web_page_preview:true});
+              setKv(db,key,true);
+            } catch { failed=true;log.error('管理员每日报告私发失败'); }
+          }
+          if(failed)lastReportDay='';
+        })().catch(() => { lastReportDay = ''; log.error('管理员每日报告发送失败'); });
       }
     }, 60_000);
     shutdownHooks.push(() => clearInterval(reportTimer));
 
     // 运维告警（每 5 分钟）
-    if (env.TG_ALERT_CHAT_ID) {
-      const alertChatId = env.TG_ALERT_CHAT_ID;
-      const opsTimer = setInterval(() => {
-        void sendOpsAlerts({
-          db,
-          sender,
-          chatId: alertChatId,
-          logger: log.child({ module: 'ops' }),
-          nowSec: Math.floor(Date.now() / 1000),
-          gatewayBannedUntilMs: gateway.bannedUntil,
-        }).catch((err: unknown) => log.error('告警发送失败', { error: err }));
-      }, 300_000);
-      shutdownHooks.push(() => clearInterval(opsTimer));
-    }
+    const opsTimer = setInterval(() => {
+      void (async () => {
+        for (const chatId of recipients) {
+          try { await sendOpsAlerts({db,sender,chatId,logger:log.child({module:'ops'}),
+            nowSec:Math.floor(Date.now()/1000),gatewayBannedUntilMs:gateway.bannedUntil}); }
+          catch { log.error('管理员告警私发失败'); }
+        }
+      })();
+    }, 300_000);
+    shutdownHooks.push(() => clearInterval(opsTimer));
 
     void bot.start({ onStart: async () => {
       log.info('Telegram bot 已启动');

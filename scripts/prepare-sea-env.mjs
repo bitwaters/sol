@@ -20,12 +20,12 @@ const entries = {
   DRY_RUN: live ? '0' : '1',
 };
 if (live) {
-  for (const key of ['TG_BOT_TOKEN', 'TG_CHAT_ID', 'TG_ADMIN_IDS', 'TG_ALERT_CHAT_ID']) {
+  for (const key of ['TG_BOT_TOKEN', 'TG_CHAT_ID', 'TG_ADMIN_IDS']) {
     if (!env[key]?.trim()) throw new Error(`Missing ${key} for live deployment`);
     entries[key] = env[key];
   }
   if (!/^\d+:[A-Za-z0-9_-]+$/.test(entries.TG_BOT_TOKEN)) throw new Error('Invalid bot token format');
-  if (![entries.TG_CHAT_ID, entries.TG_ALERT_CHAT_ID].every(value => /^-?\d+$/.test(value))) throw new Error('Invalid numeric chat ID');
+  if (!/^-?\d+$/.test(entries.TG_CHAT_ID)) throw new Error('Invalid numeric chat ID');
   if (!entries.TG_ADMIN_IDS.split(',').every(value => /^\d+$/.test(value.trim()))) throw new Error('Invalid admin IDs');
 }
 const dir = join(root, 'data', 'deployment');

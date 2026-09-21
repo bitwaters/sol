@@ -106,14 +106,21 @@ export async function sendOpsAlerts(deps: {
       : {}),
   });
   let sent = 0;
-  const bucket = Math.floor(deps.nowSec / 3600);
+  const stateKey = `ops_private_active:${deps.chatId}`;
+  const previous = getKv<Record<string,{message:string;sentAt:number}>>(deps.db,stateKey) ?? {};
+  const next = {...previous};
   for (const alert of alerts) {
-    const key = `ops_alert:${alert.kind}:${bucket}`;
-    if (getKv<boolean>(deps.db, key) === true) continue;
-    const prefix = alert.severity === 'error' ? '🚨' : '⚠️';
-    await deps.sender.sendMessage(deps.chatId, `${prefix} ${alert.message}`);
-    setKv(deps.db, key, true, deps.nowSec);
-    sent += 1;
+    const prior = previous[alert.kind];
+    if (prior && deps.nowSec-prior.sentAt<3600) continue;
+    await deps.sender.sendMessage(deps.chatId, `${alert.severity==='error'?'🚨':'⚠️'} ${prior?'异常持续：':''}${alert.message}`);
+    next[alert.kind]={message:alert.message,sentAt:deps.nowSec};
+    setKv(deps.db,stateKey,next,deps.nowSec); sent++;
+  }
+  const active = new Set(alerts.map(a=>a.kind));
+  for (const [kind,prior] of Object.entries(previous)) {
+    if(active.has(kind))continue;
+    await deps.sender.sendMessage(deps.chatId, `✅ 异常已解除：${prior.message}\n确认时间：${utcTime(deps.nowSec)}\n历史缺口仍保留，不代表历史数据已补齐。`);
+    delete next[kind];setKv(deps.db,stateKey,next,deps.nowSec);sent++;
   }
   return sent;
 }

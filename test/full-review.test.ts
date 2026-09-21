@@ -271,6 +271,8 @@ it('补充退出提醒排队后重建纠正清仓，发送前应取消', async (
   s.db.prepare("UPDATE signals SET status='pushed', sent_at=?, tg_message_id=1").run(baseNow);
   for (let i = 0; i < config.exitAlerts.minWallets; i++) s.buy(`other${i}`);
   s.db.prepare("UPDATE wallet_positions SET state='closed',sold_amount=bought_amount,last_sell_ts=? WHERE wallet LIKE 'other%'").run(baseNow);
+  s.setNow(baseNow+1);
+  s.db.prepare("UPDATE wallet_positions SET last_sell_ts=? WHERE wallet LIKE 'other%'").run(baseNow+1);
   expect(runExitMonitor(s.deps)).toBe(1);
   s.db.prepare("UPDATE wallet_positions SET state='open',sold_amount='0' WHERE wallet LIKE 'other%'").run();
   const send = sender();

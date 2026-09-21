@@ -183,7 +183,7 @@ describe('M3-2/M3-4/M3-5 推送执行器', () => {
     expect(task.next_retry_at).toBeGreaterThan(2000);
 
     db.prepare("INSERT INTO signal_wallets(signal_id,wallet,cycle_no,cluster_id) VALUES (?,'exited',1,'c0')").run(signalId);
-    db.prepare("INSERT INTO wallet_positions(wallet,token,cycle_no,state,cost_complete,bought_amount,sold_amount) VALUES ('exited','TOKEN',1,'closed',1,'100','100')").run();
+    db.prepare("INSERT INTO wallet_positions(wallet,token,cycle_no,state,cost_complete,bought_amount,sold_amount,last_sell_ts) VALUES ('exited','TOKEN',1,'closed',1,'100','100',1600)").run();
     setKv(db, 'paused', true, 2000);
     const paused = await pusher.runOnce();
     expect(paused.processed).toBe(0);
@@ -240,7 +240,7 @@ describe('M3-2/M3-4/M3-5 推送执行器', () => {
        VALUES (?, 'exit_alert', 'consensus_exit', 0, ?, '{"exitedClusters":1}', 'pending', 1600, 1600)`,
     ).run(signalId, `${signalId}:exit:consensus_exit`);
     db.prepare("INSERT INTO signal_wallets(signal_id,wallet,cycle_no,cluster_id) VALUES (?,'exited',1,'c0')").run(signalId);
-    db.prepare("INSERT INTO wallet_positions(wallet,token,cycle_no,state,cost_complete,bought_amount,sold_amount) VALUES ('exited','TOKEN',1,'closed',1,'100','100')").run();
+    db.prepare("INSERT INTO wallet_positions(wallet,token,cycle_no,state,cost_complete,bought_amount,sold_amount,last_sell_ts) VALUES ('exited','TOKEN',1,'closed',1,'100','100',1600)").run();
     setKv(db, 'paused', true, 2000);
 
     const sender = fakeSender();
@@ -269,6 +269,9 @@ describe('M3-6 退出监控', () => {
       `INSERT INTO wallet_positions (wallet, token, cycle_no, state) VALUES ('w1','TOKEN',1,'closed'), ('w2','TOKEN',1,'closed')`,
     ).run();
 
+    db.prepare('UPDATE signals SET tg_message_id=9 WHERE id=?').run(signalId);
+    for(const w of ['w1','w2'])db.prepare("INSERT INTO signal_wallets(signal_id,wallet,cycle_no,cluster_id,joined_at) VALUES (?,?,1,'c0',1900)").run(signalId,w);
+    db.prepare('UPDATE wallet_positions SET last_sell_ts=1950').run();
     const created = runExitMonitor({ db, config: loaded.config, logger: silent, now: () => 2000_000 });
     expect(created).toBe(1);
     const tasks = db.prepare("SELECT * FROM push_tasks WHERE kind = 'exit_alert'").all() as Array<{
@@ -276,7 +279,7 @@ describe('M3-6 退出监控', () => {
       dedupe_key: string;
     }>;
     expect(tasks.length).toBe(1);
-    expect(tasks[0]?.alert_type).toBe('consensus_exit');
+    expect(tasks[0]?.alert_type).toBe('state_change');
 
     const again = runExitMonitor({ db, config: loaded.config, logger: silent, now: () => 2000_000 });
     expect(again).toBe(0);

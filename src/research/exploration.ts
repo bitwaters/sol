@@ -3,7 +3,7 @@ import type { Db } from '../store/db.js';
 import { getKv, setKv } from '../store/db.js';
 import type { ResearchConfig } from './config.js';
 import type { Diagnostics, RuleCheck } from './diagnostics.js';
-import { firstResearchSamples, latestResearchScope, registerExperiment } from './report.js';
+import { firstResearchSamples, latestResearchScope, registerExperiment, type ResearchScope } from './report.js';
 import type { Experiment } from './replay.js';
 
 // Fixed before new observations: these are research alternatives, never production settings.
@@ -38,8 +38,8 @@ export function classifyThreshold(d:Diagnostics,e:Experiment) {
   return {eligible:Object.values(checks).every(passes),factorPass:keys.every(k=>passes(checks[k]!)),
     otherFailures:Object.entries(checks).filter(([k,c])=>!keys.includes(k)&&!passes(c)).map(([k])=>k)};
 }
-export function exploreResearch(db:Db,config:ResearchConfig,now=Math.floor(Date.now()/1000)) {
-  const scope=latestResearchScope(db),first=firstResearchSamples(db,scope);
+export function exploreResearch(db:Db,config:ResearchConfig,now=Math.floor(Date.now()/1000), requestedScope?:ResearchScope) {
+  const scope=requestedScope??latestResearchScope(db),first=firstResearchSamples(db,scope);
   const globalCoverage=first.length?first.filter(s=>s.state==='ready').length/first.length:0;
   const rows=first.map(s=>({s,d:s.diagnostics?JSON.parse(s.diagnostics) as Diagnostics:null}));
   const groups=[...new Set(rows.map(r=>r.d?.sources.join(',')??'unknown'))];

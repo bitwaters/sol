@@ -9,6 +9,7 @@ export const BOT_COMMANDS = [
   { command: 'status', description: '查看采集状态、信号和发送队列' },
   { command: 'config', description: '查看当前策略阈值与采集设置' },
   { command: 'stats', description: '查看信号表现与未推送原因' },
+  { command: 'research', description: '查看当前版本研究进度与调参条件' },
   { command: 'wallets', description: '查看近30天观测到的关注钱包' },
   { command: 'test', description: '检查机器人指令回复是否正常' },
   { command: 'pause', description: '暂停新信号及跟进消息，保留退出提醒' },
@@ -20,16 +21,17 @@ export const BOT_COMMANDS = [
 export const HELP_KEYBOARD = { inline_keyboard: [
   [{ text: '📊 运行状态', callback_data: 'command:status' }, { text: '⚙️ 策略配置', callback_data: 'command:config' }],
   [{ text: '📈 信号表现', callback_data: 'command:stats' }, { text: '📋 关注钱包', callback_data: 'command:wallets' }],
+  [{ text: '🔬 研究进度', callback_data: 'command:research' }],
   [{ text: '✅ 回复测试', callback_data: 'command:test' }, { text: '❓ 使用帮助', callback_data: 'command:help' }],
 ] };
 
 export function helpText(): string {
-  return ['📖 指令帮助', '仅授权管理员可使用。可点击下方查询按钮，或从 Telegram 命令菜单选择。', '',
+  return ['📖 指令帮助', '仅授权管理员在机器人私聊中使用。可点击下方查询按钮，或从 Telegram 命令菜单选择。', '',
     ...BOT_COMMANDS.map(item => `/${item.command} — ${item.description}`), '',
     '屏蔽用法：/mute 合约地址 2（屏蔽2小时）；省略小时数则永久屏蔽。',
     '解除屏蔽：/unmute 合约地址。将“合约地址”替换为实际 Solana 代币地址。',
     '暂停后采集、评估、退出提醒及运维告警继续；恢复不会保证补发已过期信号。',
-    '消息按钮：打开 GMGN 查看代币；刷新提示等待下一轮评估；屏蔽该币会永久屏蔽新信号。',
+    '消息按钮：打开 GMGN 查看代币；刷新提示等待下一轮状态评估；屏蔽该币会永久屏蔽新信号。',
     '关注钱包页面仅展示本服务观测到的成交钱包，不代表完整关注名单。',
     '所有时间均为 UTC。机器人只推送信息，不执行交易。',
   ].join('\n');
@@ -98,8 +100,8 @@ export function configText(c: AppConfig): string {
       return `${sourceLabel(source)}：基础等待 ${poll.intervalMs / 1000} 秒，每页最多 ${poll.limit} 笔成交`;
     }), '上述为每轮完成后的基础等待时间，满页时会提频，实际周期含网络与排队耗时。', '',
     '【发送与提醒】', `发送前复核：${on(c.signalValidation.prePushRecheck)} · 发送有效期：${c.signalValidation.signalTtlSeconds} 秒`,
-    `每分钟最多推送：${c.push.maxPerMinute} 条 · 消息编辑最小间隔：${c.push.editThrottleSec} 秒`,
-    `消息停止编辑时间：发送后 ${c.push.stopEditAfterMinutes} 分钟`,
+    `每分钟最多推送：${c.push.maxPerMinute} 条 · 状态评估通知最小间隔：${c.push.editThrottleSec} 秒`,
+    '首次信号永久保留；后续状态提示独立发送并引用首次信号。',
     `静默时段：${c.push.quietHours.start}–${c.push.quietHours.end} UTC（${c.push.quietHours.start === c.push.quietHours.end ? '未启用' : `仅初次推送至少 ${c.push.quietHours.minWallets} 票的信号`}）`,
     `推送后清仓提醒：${on(c.signalValidation.postPushExitAlert.enabled)} · 最少 ${c.signalValidation.postPushExitAlert.minWallets} 票`,
     `共识退出提醒：${on(c.exitAlerts.enabled)} · 最少 ${c.exitAlerts.minWallets} 票`,
