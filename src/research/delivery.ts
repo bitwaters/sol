@@ -31,7 +31,7 @@ export function captureDelivery(d:ResearchDeps){
     const related=db.prepare(`SELECT * FROM signals WHERE token IN (${tokens.map(()=>'?').join(',')}) ORDER BY id LIMIT 1001`).all(...tokens) as typeof signals;
     if(related.length>1000)throw new Error('frame_signal_limit');
     for(const snapshot of snapshots)for(const signal of related) {
-      const keys=['edit_last','warn','downgrade','partial','exit_done','exit_events','published_state','notification_reason','published_member_version'].map(k=>`${k}:${signal.id}`);
+      const keys=['edit_last','warn','downgrade','partial','exit_done','exit_events','published_state','notification_reason','published_member_version','exit_message'].map(k=>`${k}:${signal.id}`);
       snapshot.tables.kv!.push(...db.prepare(`SELECT * FROM kv WHERE key IN (${keys.map(()=>'?').join(',')})`).all(...keys) as typeof signals);
     }
     const relatedIds=related.map(s=>s.id!),relatedMarks=relatedIds.map(()=>'?').join(',');

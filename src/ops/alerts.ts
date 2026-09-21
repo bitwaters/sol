@@ -75,6 +75,9 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
     });
   }
 
+  const unconfirmedExit=db.prepare("SELECT COUNT(*) n FROM push_tasks WHERE kind='exit_alert' AND status='unknown' AND tg_message_id IS NULL AND attempts>=max_attempts").get() as {n:number};
+  if(unconfirmedExit.n)alerts.push({kind:'exit_delivery_unknown',severity:'error',
+    message:`${unconfirmedExit.n} 条首次退出提醒送达结果不明，已停止自动补发以避免刷屏，请管理员核对频道。`});
   const failed = db.prepare("SELECT COUNT(*) AS n FROM push_tasks WHERE status='failed' AND attempts>=max_attempts").get() as { n: number };
   if (failed.n > 0) alerts.push({ kind: 'push_exhausted', severity: 'error', message: `推送重试已耗尽 ${failed.n} 条` });
   if (getKv(db, 'research_enabled') === true && nowSec - started > 600) {

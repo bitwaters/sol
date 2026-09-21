@@ -4,7 +4,7 @@ import { measureAsync, runtimeMetrics } from '../ops/metrics.js';
 import { measureTelegram } from './telemetry.js';
 import { TelegramDeliveryUnknownError } from './types.js';
 import type { CexBlacklist } from '../enrich/wallet.js';
-import { exitChanges, runExitMonitor } from './exit-monitor.js';
+import { exitChanges, runExitMonitor, exitMessage, exitSignature } from './exit-monitor.js';
 import { publishedState, updateMessage } from './updates.js';
 import { utcTime } from './labels.js';
 import { boundHoldingRatio } from '../signal/members.js';
@@ -256,7 +256,8 @@ export class Pusher {
 
     // 重启/崩溃恢复：卡在 sending 超过 10s 的任务转 unknown（可重试）
     db.prepare(
-      `UPDATE push_tasks SET status = 'unknown', updated_at = ?
+      `UPDATE push_tasks SET status = 'unknown', updated_at = ?,
+         attempts=CASE WHEN kind='exit_alert' AND tg_message_id IS NULL THEN max_attempts ELSE attempts END
        WHERE status = 'sending' AND updated_at < ?`,
     ).run(nowSec, nowSec - 10);
 
@@ -552,25 +553,40 @@ export class Pusher {
         return 'sent';
       }
 
-      const signal=db.prepare('SELECT tg_message_id,tg_chat_id FROM signals WHERE id=?').get(task.signal_id) as {tg_message_id:number|null;tg_chat_id:string|null}|undefined;
-      const changes=exitChanges(db,config,task.signal_id,Math.floor(this.now()/1000),this.deps.blacklist);
-      if(!signal?.tg_message_id||!changes.keys.length){this.cancelTask(task,nowSec,'exit_conditions_changed');return 'cancelled';}
+      const signal=db.prepare(`SELECT s.tg_message_id,s.tg_chat_id,s.sent_at,t.created_at FROM signals s LEFT JOIN tokens t ON t.address=s.token WHERE s.id=? AND s.status='pushed'`).get(task.signal_id) as {tg_message_id:number|null;tg_chat_id:string|null;sent_at:number|null;created_at:number|null}|undefined;
+      if(!signal||signal.sent_at===null||nowSec-signal.sent_at>86400||(signal.created_at!==null&&nowSec-signal.created_at>86400)){this.cancelTask(task,nowSec,'exit_monitoring_expired');return 'cancelled';}
+      const changes=exitChanges(db,config,task.signal_id,Math.floor(this.now()/1000),this.deps.blacklist,true);
+      const anchor=exitMessage(db,task.signal_id),signature=exitSignature(changes);
+      if(!signal?.tg_message_id||(!changes.keys.length&&!anchor)){this.cancelTask(task,nowSec,'exit_conditions_changed');return 'cancelled';}
+      if(anchor?.signature===signature){this.cancelTask(task,nowSec,'unchanged_exit_state');return 'cancelled';}
+      if(anchor && nowSec-anchor.updatedAt<Math.max(30,config.push.editThrottleSec)) {
+        db.prepare("UPDATE push_tasks SET status='pending',updated_at=? WHERE id=?").run(nowSec,task.id);return 'deferred';
+      }
       const view=loadSignalView(db,task.signal_id,nowSec);
       if(!view){this.cancelTask(task,nowSec,'view_missing');return 'cancelled';}
-      const previous=publishedState(db,task.signal_id);
       const pct=(v:number|null)=>v===null?'不可核验':`${(v*100).toFixed(0)}%`;
       const text=[`${changes.corrections?'⚠️ 数据更正 / 退出状态':'🔴 退出提醒'} #${task.signal_id.toString(36).toUpperCase()}`,
-        ...(changes.consensus?[`本次新增共识退出：${changes.consensus} 簇`]:[]),
-        ...(changes.other?[`本次新增其他钱包退出：${changes.other} 簇`]:[]),
+        ...(changes.consensus?[`当前共识退出：${changes.consensus} 簇`]:[]),
+        ...(changes.other?[`当前其他钱包退出：${changes.other} 簇`]:[]),
         ...(changes.corrections?[`历史状态更正：${changes.corrections} 簇（清仓早于发布/加入，或时间不可核验）`]:[]),
-        `持仓保留率：${pct(previous.holding)} → ${pct(view.retentionRatio)}`,
+        `当前持仓保留率：${pct(view.retentionRatio)}`,
         `最新已知事件时间：${utcTime(changes.eventAt)}`,`确认时间：${utcTime(Math.floor(this.now()/1000))}`,
-        '本提示合并同轮相关变化，引用首次信号。'].join('\n');
-      const sent=await sender.sendMessage(signal.tg_chat_id??chatId,text,{reply_parameters:{message_id:signal.tg_message_id},disable_web_page_preview:true});
+        ...(changes.keys.length?[]:['此前清仓状态已被重建纠正，当前无满足提醒条件的退出。']),
+        '本条为退出状态汇总，后续变化更新此消息；首次信号保持不变。'].join('\n');
+      let messageId:number;
+      if(anchor){
+        if(anchor.messageId===signal.tg_message_id){this.cancelTask(task,nowSec,'invalid_exit_anchor');return 'cancelled';}
+        await sender.editMessageText(anchor.chatId??signal.tg_chat_id??chatId,anchor.messageId,text,{disable_web_page_preview:true});
+        messageId=anchor.messageId;
+      }else{
+        const sent=await sender.sendMessage(signal.tg_chat_id??chatId,text,{reply_parameters:{message_id:signal.tg_message_id},disable_web_page_preview:true});
+        messageId=sent.message_id;
+      }
       nowSec=Math.floor(this.now()/1000);
       db.transaction(()=>{
         db.prepare("UPDATE push_tasks SET status='sent',tg_message_id=?,payload=?,attempts=attempts+1,updated_at=? WHERE id=?")
-          .run(sent.message_id,JSON.stringify(changes),nowSec,task.id);
+          .run(messageId,JSON.stringify(changes),nowSec,task.id);
+        setKv(db,`exit_message:${task.signal_id}`,{messageId,chatId:anchor?.chatId??signal.tg_chat_id??chatId,updatedAt:nowSec,signature},nowSec);
         const known=getKv<string[]>(db,`exit_events:${task.signal_id}`)??[];
         setKv(db,`exit_events:${task.signal_id}`,[...new Set([...known,...changes.keys])],nowSec);
         setKv(db,`published_state:${task.signal_id}`,{votes:view.votes,holding:view.retentionRatio,condition:'exited',reason:null},nowSec);
@@ -580,7 +596,8 @@ export class Pusher {
       logger.info('退出状态提示已推送',{signalId:task.signal_id});return 'sent';
     } catch (err) {
       nowSec = Math.floor(this.now() / 1000);
-      const attempts = task.attempts + 1;
+      const uncertainFirstExit = err instanceof TelegramDeliveryUnknownError && task.kind==='exit_alert' && !exitMessage(db,task.signal_id);
+      const attempts = uncertainFirstExit ? task.max_attempts : task.attempts + 1;
       if (err instanceof TelegramRateLimitError) {
         const retryAt = nowSec + Math.max(err.retryAfterSec, 1);
         db.prepare(

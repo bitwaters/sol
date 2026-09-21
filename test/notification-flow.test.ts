@@ -53,18 +53,21 @@ describe('immutable originals and referenced state events',()=>{
     const s=await setup();s.setNow(s.at+5);close(s,'w1',s.at+1);
     s.buy('other1',s.at+1);s.buy('other2',s.at+1);close(s,'other1',s.at+2);close(s,'other2',s.at+3);
     queue(s);expect((await push(s)).sent).toBe(1);
-    expect(s.sender.sendMessage.mock.calls[0]?.[1]).toContain('本次新增共识退出：1');
-    expect(s.sender.sendMessage.mock.calls[0]?.[1]).toContain('本次新增其他钱包退出：2');
+    expect(s.sender.sendMessage.mock.calls[0]?.[1]).toContain('当前共识退出：1');
+    expect(s.sender.sendMessage.mock.calls[0]?.[1]).toContain('当前其他钱包退出：2');
     expect(s.sender.sendMessage.mock.calls[0]?.[2]).toMatchObject({reply_parameters:{message_id:100}});
     expect((await push(s)).sent).toBe(0);
-    close(s,'w2',s.at+4);expect((await push(s)).sent).toBe(1); // subsequent new exit is not lost
-    expect(s.sender.sendMessage.mock.calls[1]?.[1]).toContain('本次新增共识退出：1');
+    close(s,'w2',s.at+4);expect((await push(s)).sent).toBe(0); // coalesced during edit throttle
+    s.setNow(s.at+36);expect((await push(s)).sent).toBe(1);
+    expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
+    expect(s.sender.editMessageText.mock.calls[0]?.[2]).toContain('当前共识退出：2');
   });
   it('labels late historical closure as correction and preserves immediate genuine exits',async()=>{
     const s=await setup();s.setNow(s.at+4);close(s,'w1',s.at-2);
     expect((await push(s)).sent).toBe(1);expect(s.sender.sendMessage.mock.calls[0]?.[1]).toContain('历史状态更正');
-    close(s,'w2',s.at+1);expect((await push(s)).sent).toBe(1);
-    expect(s.sender.sendMessage.mock.calls[1]?.[1]).toContain('本次新增共识退出：1');
+    close(s,'w2',s.at+1);s.setNow(s.at+35);expect((await push(s)).sent).toBe(1);
+    expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
+    expect(s.sender.editMessageText.mock.calls[0]?.[2]).toContain('当前共识退出：1');
   });
   it('rebuild reopening before delivery cancels pending exits',async()=>{
     const s=await setup();s.setNow(s.at+5);close(s,'w1',s.at+1);expect(runExitMonitor(s.deps)).toBe(1);
@@ -122,4 +125,54 @@ it('an enhancement recheck does not rewrite original membership or first-send da
   expect((await revalidateSignalForSend(s.deps,s.id,true)).ok).toBe(true);
   expect(s.db.prepare('SELECT * FROM signal_wallets WHERE signal_id=?').all(s.id)).toEqual(before);
   expect(s.db.prepare('SELECT tg_message_id,sent_at,send_snapshot FROM signals WHERE id=?').get(s.id)).toEqual(original);
+});
+
+it('reuses the earliest legacy exit reply and never edits the original',async()=>{
+  const s=await setup();s.setNow(s.at+40);close(s,'w1',s.at+1);
+  for(const [i,msg] of [[1,701],[2,702]])s.db.prepare("INSERT INTO push_tasks(signal_id,kind,dedupe_key,payload,status,tg_message_id,created_at,updated_at) VALUES (?,'exit_alert',?,'{}','sent',?,?,?)")
+    .run(s.id,'legacy'+i,msg,s.at+i!,s.at+i!);
+  expect((await push(s)).sent).toBe(1);
+  expect(s.sender.sendMessage).not.toHaveBeenCalled();
+  expect(s.sender.editMessageText.mock.calls[0]?.slice(0,2)).toEqual(['channel',701]);
+  expect(s.db.prepare('SELECT tg_message_id FROM signals WHERE id=?').get(s.id)).toEqual({tg_message_id:100});
+  close(s,'w2',s.at+41);s.setNow(s.at+80);await push(s);
+  expect(s.sender.editMessageText.mock.calls[1]?.[1]).toBe(701); // survives new Pusher instance
+});
+it('keeps a single pending exit update while many fresh events arrive',async()=>{
+  const s=await setup();s.setNow(s.at+4);close(s,'w1',s.at+1);await push(s);
+  close(s,'w2',s.at+2);await push(s);close(s,'w3',s.at+3);await push(s);
+  expect(s.db.prepare("SELECT COUNT(*) n FROM push_tasks WHERE kind='exit_alert'").get()).toEqual({n:1});
+  expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);expect(s.sender.editMessageText).not.toHaveBeenCalled();
+  s.setNow(s.at+34);await push(s);
+  expect(s.sender.editMessageText.mock.calls[0]?.[2]).toContain('当前共识退出：3');
+  expect(s.sender.editMessageText.mock.calls[0]?.[1]).toBe(101);
+});
+it('does not fall back to new messages if editing the exit summary fails',async()=>{
+  const s=await setup();s.setNow(s.at+4);close(s,'w1',s.at+1);await push(s);
+  close(s,'w2',s.at+5);s.setNow(s.at+35);s.sender.editMessageText.mockRejectedValueOnce(new Error('message cannot be edited'));
+  expect((await push(s)).failed).toBe(1);expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
+  s.setNow(s.at+100);expect((await push(s)).sent).toBe(1);
+  expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);expect(s.sender.editMessageText).toHaveBeenCalledTimes(2);
+});
+it('corrects an existing exit summary when rebuilt positions reopen without adding another message',async()=>{
+  const s=await setup();s.setNow(s.at+4);close(s,'w1',s.at+1);await push(s);
+  s.db.prepare("UPDATE wallet_positions SET state='open',sold_amount='0' WHERE wallet='w1'").run();s.setNow(s.at+35);
+  expect((await push(s)).sent).toBe(1);
+  expect(s.sender.editMessageText.mock.calls[0]?.[2]).toContain('此前清仓状态已被重建纠正');
+  expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);expect((await push(s)).sent).toBe(0);
+});
+it('does not misreport expired monitoring as a reopened position',async()=>{
+  const s=await setup();s.setNow(s.at+4);close(s,'w1',s.at+1);await push(s);
+  close(s,'w2',s.at+5);await push(s);s.setNow(s.at+86401);
+  expect((await push(s)).sent).toBe(0);expect(s.sender.editMessageText).not.toHaveBeenCalled();
+});
+
+it('does not resend a first exit when Telegram delivery is uncertain',async()=>{
+  const {TelegramDeliveryUnknownError}=await import('../src/telegram/types.js');
+  const {collectOpsAlerts}=await import('../src/ops/alerts.js');
+  const s=await setup();s.setNow(s.at+4);close(s,'w1',s.at+1);
+  s.sender.sendMessage.mockRejectedValueOnce(new TelegramDeliveryUnknownError());
+  expect((await push(s)).failed).toBe(1);s.setNow(s.at+200);
+  expect((await push(s)).sent).toBe(0);expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
+  expect(collectOpsAlerts(s.db,{nowSec:s.at+200}).some(a=>a.kind==='exit_delivery_unknown')).toBe(true);
 });

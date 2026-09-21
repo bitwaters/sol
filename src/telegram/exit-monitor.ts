@@ -9,7 +9,7 @@ export interface ExitMonitorDeps {db:Db;config:AppConfig;logger:Logger;now?:()=>
 export interface ExitChanges {keys:string[];consensus:number;other:number;corrections:number;eventAt:number|null;}
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex').slice(0,24);
 /** Fresh closure events, tied to the monitored position cycle rather than current wallet balance. */
-export function exitChanges(db:Db,config:AppConfig,signalId:number,now:number,blacklist:CexBlacklist={entries:new Map()}):ExitChanges {
+export function exitChanges(db:Db,config:AppConfig,signalId:number,now:number,blacklist:CexBlacklist={entries:new Map()}, includeAcknowledged=false):ExitChanges {
   const empty:ExitChanges={keys:[],consensus:0,other:0,corrections:0,eventAt:null};
   const signal=db.prepare(`SELECT s.token,s.sent_at,t.created_at FROM signals s LEFT JOIN tokens t ON t.address=s.token
     WHERE s.id=? AND s.status='pushed' AND s.tg_message_id IS NOT NULL`).get(signalId) as {token:string;sent_at:number|null;created_at:number|null}|undefined;
@@ -18,7 +18,7 @@ export function exitChanges(db:Db,config:AppConfig,signalId:number,now:number,bl
   const rows=db.prepare(`SELECT sw.wallet,sw.cycle_no,sw.cluster_id,sw.joined_at,p.state,p.last_sell_ts
     FROM signal_wallets sw LEFT JOIN wallet_positions p ON p.wallet=sw.wallet AND p.token=? AND p.cycle_no=sw.cycle_no
     WHERE sw.signal_id=? AND COALESCE(sw.joined_version,0)<=?`).all(signal.token,signalId,getKv<number>(db,`published_member_version:${signalId}`)??0) as Row[];
-  const acknowledged=new Set(getKv<string[]>(db,`exit_events:${signalId}`)??[]);
+  const acknowledged=new Set(includeAcknowledged?[]:getKv<string[]>(db,`exit_events:${signalId}`)??[]);
   const grouped=new Map<string,Row[]>();for(const r of rows){const k=r.cluster_id??r.wallet;grouped.set(k,[...(grouped.get(k)??[]),r]);}
   const closed=[...grouped.values()].filter(g=>g.every(r=>r.state==='closed'&&(r.last_sell_ts===null||r.last_sell_ts<=now)));
   const out={...empty,keys:[] as string[]};
@@ -42,18 +42,33 @@ export function exitChanges(db:Db,config:AppConfig,signalId:number,now:number,bl
   }
   return out;
 }
-/** One pending event packet per actual closure set; delivery recomputes and merges new events. */
+export interface ExitMessage {messageId:number;chatId:string|null;updatedAt:number;signature?:string;}
+/** Reuse the earliest confirmed exit reply, including replies published before this upgrade. */
+export function exitMessage(db:Db,signalId:number):ExitMessage|null {
+  const saved=getKv<ExitMessage>(db,`exit_message:${signalId}`);if(saved)return saved;
+  const row=db.prepare(`SELECT t.tg_message_id messageId,s.tg_chat_id chatId,t.updated_at updatedAt
+    FROM push_tasks t JOIN signals s ON s.id=t.signal_id WHERE t.signal_id=? AND t.kind='exit_alert'
+    AND t.status='sent' AND t.tg_message_id IS NOT NULL AND t.tg_message_id!=s.tg_message_id ORDER BY t.id LIMIT 1`)
+    .get(signalId) as ExitMessage|undefined;
+  return row??null;
+}
+export function exitSignature(changes:ExitChanges):string {
+  return hash(JSON.stringify([changes.keys.slice().sort(),changes.consensus,changes.other,changes.corrections]));
+}
+/** Coalesce pending changes; the first exit reply is sent once, then edited in place. */
 export function runExitMonitor(deps:ExitMonitorDeps):number {
   const {db,config}=deps,now=Math.floor((deps.now?.()??Date.now())/1000);
-  const signals=db.prepare("SELECT id FROM signals WHERE status='pushed' AND sent_at>=? AND tg_message_id IS NOT NULL").all(now-86400) as {id:number}[];
+  const signals=db.prepare(`SELECT s.id FROM signals s LEFT JOIN tokens t ON t.address=s.token
+    WHERE s.status='pushed' AND s.sent_at>=? AND s.tg_message_id IS NOT NULL AND (t.created_at IS NULL OR t.created_at>=?)`).all(now-86400,now-86400) as {id:number}[];
   let created=0;
   for(const {id} of signals){
-    const changes=exitChanges(db,config,id,now,deps.blacklist);if(!changes.keys.length)continue;
-    const key=`${id}:exit:events:${hash(changes.keys.sort().join('|'))}`;
+    const changes=exitChanges(db,config,id,now,deps.blacklist,true),anchor=exitMessage(db,id);
+    if((!changes.keys.length&&!anchor)||anchor?.signature===exitSignature(changes))continue;
     const res=db.prepare(`INSERT INTO push_tasks(signal_id,kind,alert_type,revision,dedupe_key,payload,status,created_at,updated_at)
       VALUES (?,'exit_alert','state_change',0,?,?,'pending',?,?) ON CONFLICT(dedupe_key) DO UPDATE SET
-      status='pending',payload=excluded.payload,attempts=0,next_retry_at=NULL,updated_at=excluded.updated_at WHERE push_tasks.status='cancelled'`)
-      .run(id,key,JSON.stringify(changes),now,now);
+      status='pending',payload=excluded.payload,attempts=0,next_retry_at=NULL,updated_at=excluded.updated_at
+      WHERE push_tasks.status IN ('sent','cancelled')`)
+      .run(id,`${id}:exit:status`,JSON.stringify(changes),now,now);
     created+=res.changes;
   }
   return created;

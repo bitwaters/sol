@@ -101,7 +101,7 @@ export function configText(c: AppConfig): string {
     }), '上述为每轮完成后的基础等待时间，满页时会提频，实际周期含网络与排队耗时。', '',
     '【发送与提醒】', `发送前复核：${on(c.signalValidation.prePushRecheck)} · 发送有效期：${c.signalValidation.signalTtlSeconds} 秒`,
     `每分钟最多推送：${c.push.maxPerMinute} 条 · 状态评估通知最小间隔：${c.push.editThrottleSec} 秒`,
-    '首次信号永久保留；后续状态提示独立发送并引用首次信号。',
+    '首次信号永久保留；退出提醒仅发一条，后续最多每30秒更新该条。',
     `静默时段：${c.push.quietHours.start}–${c.push.quietHours.end} UTC（${c.push.quietHours.start === c.push.quietHours.end ? '未启用' : `仅初次推送至少 ${c.push.quietHours.minWallets} 票的信号`}）`,
     `推送后清仓提醒：${on(c.signalValidation.postPushExitAlert.enabled)} · 最少 ${c.signalValidation.postPushExitAlert.minWallets} 票`,
     `共识退出提醒：${on(c.exitAlerts.enabled)} · 最少 ${c.exitAlerts.minWallets} 票`,
