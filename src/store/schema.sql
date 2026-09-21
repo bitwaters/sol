@@ -313,3 +313,19 @@ CREATE TABLE IF NOT EXISTS research_delivery_frames (
   id INTEGER PRIMARY KEY, captured_at INTEGER NOT NULL, digest TEXT NOT NULL UNIQUE,
   frame BLOB, error TEXT
 );
+
+-- Durable derived-position work, committed atomically with raw ingestion.
+CREATE TABLE IF NOT EXISTS position_jobs (
+  wallet TEXT NOT NULL, token TEXT NOT NULL, from_ts INTEGER NOT NULL,
+  created_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+  next_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(wallet,token)
+);
+CREATE INDEX IF NOT EXISTS idx_position_jobs_token ON position_jobs(token);
+CREATE INDEX IF NOT EXISTS idx_position_jobs_due ON position_jobs(next_at,created_at);
+CREATE TABLE IF NOT EXISTS cost_invalidation_job (
+  id INTEGER PRIMARY KEY CHECK(id=1), until_ts INTEGER NOT NULL,
+  cursor INTEGER NOT NULL DEFAULT 0, phase INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wallet_positions_state ON wallet_positions(state);

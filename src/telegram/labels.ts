@@ -32,6 +32,7 @@ const reasons: Record<string, string> = {
   candidate_changed_during_recheck: '复核期间候选已变化', signal_missing: '信号记录缺失',
   signal_not_sending: '信号已不处于待发送状态', stale_revision: '消息版本已过期', view_missing: '消息数据缺失',
   no_original_message: '缺少原始推送消息', exit_conditions_changed: '退出条件已变化', exit_view_missing: '退出提醒数据缺失',
+  derived_pending: '持仓计算等待完成',
   rebuild_in_progress: '持仓历史重建中', hard_filter_cooldown: '过滤后暂缓重试', cooldown_active: '信号冷却中',
   retrigger_cooldown: '等待再次触发', no_reliable_start: '缺少可靠的持仓起点', observed_history_only: '仅有已观测历史',
 };

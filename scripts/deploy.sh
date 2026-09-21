@@ -22,6 +22,16 @@ install -d -m 700 -o 1000 -g 1000 "$SOL_DATA_DIR"
 install -m 644 -o 1000 -g 1000 data/cex-blacklist.json "$SOL_DATA_DIR/cex-blacklist.json"
 docker compose -p sol config --quiet
 docker compose -p sol build
+# Mark a planned restart in runtime state; data-gap accounting remains enabled.
+if [[ -n "$(docker compose -p sol ps --status running -q bot)" ]]; then
+  docker compose -p sol exec -T bot node --input-type=module <<'JS'
+import Database from 'better-sqlite3';
+const db=new Database('/app/data/meme.sqlite');db.pragma('busy_timeout=5000');
+const now=Math.floor(Date.now()/1000);
+db.prepare("INSERT INTO kv(key,value,updated_at) VALUES ('planned_restart',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
+  .run(JSON.stringify({requestedAt:now,expiresAt:now+600}),now);db.close();
+JS
+fi
 docker compose -p sol up -d --no-build --remove-orphans
 git rev-parse HEAD
 docker compose -p sol ps

@@ -1,3 +1,4 @@
+import { derivedPending } from '../store/derived-work.js';
 import type { AppConfig } from '../config.js';
 import { CACHE_TTL, getCachedToken, rowToSnapshot, type TokenSnapshot } from '../enrich/token.js';
 import { getWalletProfile, WALLET_PROFILE_TTL_SEC, type CexBlacklist } from '../enrich/wallet.js';
@@ -48,7 +49,7 @@ export function captureFeatures(db: Db, config: AppConfig, blacklist: CexBlackli
       fetchTokenSecurity: async () => { throw new Error('snapshot only'); },
     } }, snapshot) : null;
   const profiles = window.votingWallets.map(wallet => getWalletProfile(db, wallet));
-  const complete = snapshot !== null && fresh(snapshot.priceUpdatedAt, now, CACHE_TTL.price)
+  const complete = !derivedPending(db,token) && snapshot !== null && fresh(snapshot.priceUpdatedAt, now, CACHE_TTL.price)
     && fresh(snapshot.riskUpdatedAt, now, CACHE_TTL.risk) && fresh(snapshot.basicUpdatedAt, now, CACHE_TTL.basic)
     && profiles.every(profile => profile && profile.walletCreatedAt !== null && fresh(profile.refreshedAt, now, WALLET_PROFILE_TTL_SEC));
   return {

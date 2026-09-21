@@ -1,3 +1,4 @@
+import { derivedPending } from '../store/derived-work.js';
 import { observeMilestones, deliverMilestone, cleanupMilestones } from './milestones.js';
 import { captureFeatures, fresh } from '../backtest/features.js';
 import { saveLiveQuality, validPrice } from '../backtest/quality.js';
@@ -357,6 +358,12 @@ export class Pusher {
     const sender = measureTelegram(this.deps.sender);
 
     try {
+      const target=db.prepare('SELECT token FROM signals WHERE id=?').get(task.signal_id) as {token:string}|undefined;
+      const deferDerived=()=>{
+        db.prepare("UPDATE push_tasks SET status='pending',updated_at=? WHERE id=?").run(Math.floor(this.now()/1000),task.id);
+        return 'deferred' as const;
+      };
+      if(task.kind!=='milestone'&&target&&derivedPending(db,target.token))return deferDerived();
       if (task.kind === 'milestone') {
         const outcome = await deliverMilestone(db, sender, task.signal_id, chatId, this.now);
         nowSec = Math.floor(this.now() / 1000);
@@ -417,6 +424,7 @@ export class Pusher {
           if (this.deps.revalidate) {
             const check = await measureAsync('push.revalidate', () => this.deps.revalidate!(signal.id));
             nowSec = Math.floor(this.now() / 1000);
+            if (check.reason==='derived_pending'||derivedPending(db,signal.token))return deferDerived();
             const current = db.prepare('SELECT status, triggered_at FROM signals WHERE id = ?').get(signal.id) as { status: string; triggered_at: number } | undefined;
             if (!current || current.status !== 'sending' || nowSec - current.triggered_at > 3600) {
               this.cancelTask(task, nowSec, 'candidate_changed_during_recheck');
@@ -481,6 +489,7 @@ export class Pusher {
           }
           const check=this.deps.revalidateUpdate?await this.deps.revalidateUpdate(signal.id):null;
           nowSec=Math.floor(this.now()/1000);
+          if(check?.reason==='derived_pending'||derivedPending(db,signal.token))return deferDerived();
           const current=db.prepare('SELECT message_revision,escalated_count FROM signals WHERE id=?').get(signal.id) as {message_revision:number;escalated_count:number};
           if(current.message_revision!==task.revision){this.cancelTask(task,nowSec,'stale_revision');return 'cancelled';}
           if(exitChanges(db,config,signal.id,nowSec,this.deps.blacklist).keys.length){

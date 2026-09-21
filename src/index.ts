@@ -1,3 +1,4 @@
+import { enqueuePositions, startDerivedWorker } from './signal/derived-worker.js';
 import { observeMilestones } from './telegram/milestones.js';
 import { createResearchSchedule } from './research/scheduler.js';
 import { advanceResearchExperiments } from './research/exploration.js';
@@ -27,7 +28,6 @@ import { extractFollowNextToken, Poller } from './ingest/poller.js';
 import type { NormalizedTrade } from './ingest/normalize.js';
 import { createLogger } from './logger.js';
 import { evaluateToken, revalidateSignalForSend, runCandidateMaintenance } from './signal/candidate.js';
-import { applyIngestedTrades } from './signal/ingest.js';
 import { createBot, grammySender, registerBotCommands } from './telegram/bot.js';
 import { runExitMonitor } from './telegram/exit-monitor.js';
 import { Pusher } from './telegram/pusher.js';
@@ -50,7 +50,12 @@ async function main(): Promise<void> {
   const dataDir = join(PROJECT_ROOT, 'data');
   mkdirSync(dataDir, { recursive: true });
   const db = openDatabase({ path: join(dataDir, 'meme.sqlite') });
-  setKv(db, 'service_started_at', Math.floor(Date.now() / 1000));
+  const bootAt=Math.floor(Date.now()/1000);
+  const planned=getKv<{requestedAt:number;expiresAt:number}>(db,'planned_restart');
+  if(planned&&planned.expiresAt>=bootAt)setKv(db,'last_planned_restart',{requestedAt:planned.requestedAt,startedAt:bootAt},bootAt);
+  db.prepare("DELETE FROM kv WHERE key='planned_restart'").run();
+  setKv(db, 'deferred_ingest', true, bootAt);
+  setKv(db, 'service_started_at', bootAt);
   setKv(db, 'runtime_metrics', null);
   setKv(db, 'enabled_sources', ['smartmoney', 'kol', ...(env.GMGN_PRIVATE_KEY ? ['follow'] : [])]);
   setKv(db, 'research_enabled', research.config.enabled);
@@ -103,10 +108,10 @@ async function main(): Promise<void> {
       observationStartedAt = Math.floor(Date.now() / 1000);
       setKv(db, 'observation_started_at', observationStartedAt);
     }
-    applyIngestedTrades(db, trades, config.signalValidation.positionDustRatio, log);
-    for (const token of new Set(trades.map((t) => t.baseAddress))) scheduleEvaluation(token);
+    enqueuePositions(db, trades, Math.floor(Date.now()/1000));
   };
 
+  const stopDerivedWorker = startDerivedWorker(db, config.signalValidation.positionDustRatio, log, scheduleEvaluation);
   const pollers: Poller[] = [
     new Poller({
       source: 'smartmoney',
@@ -411,6 +416,7 @@ async function main(): Promise<void> {
     for (const hook of shutdownHooks) hook();
     for (const poller of pollers) poller.stop();
     evaluationScheduler.stop();
+    stopDerivedWorker();
     closeDb(db);
     process.exit(0);
   };

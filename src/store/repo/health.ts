@@ -12,6 +12,12 @@ export function staleSources(db: Db, now: number): Array<{source:string;from:num
 }
 /** Bulk revoke once at onset/recovery; incoming trades carry the live outage boundary themselves. */
 function invalidateCosts(db: Db, until: number, now: number): void {
+  if (getKv(db,'deferred_ingest') === true) {
+    db.prepare(`INSERT INTO cost_invalidation_job(id,until_ts,created_at) VALUES (1,?,?)
+      ON CONFLICT(id) DO UPDATE SET phase=CASE WHEN excluded.until_ts>until_ts THEN 0 ELSE phase END, cursor=CASE WHEN excluded.until_ts>until_ts THEN 0 ELSE cursor END,
+      until_ts=MAX(until_ts,excluded.until_ts)`).run(until,now);
+    return;
+  }
   const relevant = "state IN ('open','unknown','incomplete') AND (cycle_started_at IS NULL OR cycle_started_at<=?)";
   db.prepare(`INSERT INTO kv(key,value,updated_at)
     SELECT DISTINCT 'gap_affected:'||token||':'||wallet,'true',? FROM wallet_positions WHERE ${relevant}
@@ -121,5 +127,31 @@ export function upsertSourceHealth(
       db.prepare("UPDATE data_gaps SET state='recovered',closed_at=? WHERE source=? AND state='open'").run(now, patch.source);
       deleteKv(db, gapKey);
     }
+  })();
+}
+
+/** Bounded revocation; the pending marker blocks eligibility until the final chunk commits. */
+export function drainCostInvalidation(db: Db, limit=100): number {
+  return db.transaction(()=>{
+    const job=db.prepare('SELECT until_ts,cursor,phase FROM cost_invalidation_job WHERE id=1').get() as {until_ts:number;cursor:number;phase:number}|undefined;
+    if(!job)return 0;
+    // Walk rowids instead of scanning the full table on every chunk.
+    const state=['open','unknown','incomplete'][job.phase]!;
+    const rows=db.prepare('SELECT rowid rid,wallet,token,state,cycle_started_at FROM wallet_positions WHERE state=? AND rowid>? ORDER BY rowid LIMIT ?')
+      .all(state,job.cursor,limit) as {rid:number;wallet:string;token:string;state:string;cycle_started_at:number|null}[];
+    const now=Math.floor(Date.now()/1000);
+    for(const row of rows){
+      if(!['open','unknown','incomplete'].includes(row.state)||(row.cycle_started_at!==null&&row.cycle_started_at>job.until_ts))continue;
+      setKv(db,`gap_affected:${row.token}:${row.wallet}`,true,now);
+      const key=`gap_affected_until:${row.token}:${row.wallet}`;
+      setKv(db,key,Math.max(getKv<number>(db,key)??0,job.until_ts),now);
+      db.prepare('UPDATE wallet_positions SET cost_complete=0,confidence=0.3 WHERE rowid=?').run(row.rid);
+    }
+    if(rows.length<limit){
+      if(job.phase===2)db.prepare('DELETE FROM cost_invalidation_job WHERE id=1').run();
+      else db.prepare('UPDATE cost_invalidation_job SET phase=phase+1,cursor=0 WHERE id=1').run();
+    }
+    else db.prepare('UPDATE cost_invalidation_job SET cursor=? WHERE id=1').run(rows.at(-1)!.rid);
+    return Math.max(1,rows.length);
   })();
 }

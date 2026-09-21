@@ -37,6 +37,8 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
     gap_from_ts: number | null;
     gap_to_ts: number | null;
   }>;
+  const restart=getKv<{requestedAt:number;startedAt:number}>(db,'last_planned_restart');
+  const restartRelated=(from:number|null)=>restart&&from!==null&&from<=restart.startedAt&&from>=restart.requestedAt-60&&nowSec-restart.startedAt<600?'（计划部署重启期间；仍保留数据缺失标记）':'';
   const enabled = getKv<string[]>(db, 'enabled_sources');
   const rows = enabled ? enabled.map((source) => health.find((h) => h.source === source) ?? { source, last_success_at: null, gap_from_ts: null, gap_to_ts: null }) : health;
   for (const row of rows) {
@@ -44,14 +46,14 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
       alerts.push({
         kind: `heartbeat:${row.source}`,
         severity: 'error',
-        message: `${sourceLabel(row.source)}采集超时（最近成功：${utcTime(row.last_success_at)}）`,
+        message: `${sourceLabel(row.source)}采集超时（最近成功：${utcTime(row.last_success_at)}）${restartRelated(row.last_success_at)}`,
       });
     }
     if (row.gap_from_ts !== null) {
       alerts.push({
         kind: `gap:${row.source}`,
         severity: 'warn',
-        message: `${sourceLabel(row.source)}存在采集缺口：${utcTime(row.gap_from_ts)} 至 ${utcTime(row.gap_to_ts)}`,
+        message: `${sourceLabel(row.source)}存在采集缺口：${utcTime(row.gap_from_ts)} 至 ${utcTime(row.gap_to_ts)}${restartRelated(row.gap_from_ts)}`,
       });
     }
   }
@@ -84,6 +86,12 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
   const cleanupFailed = db.prepare("SELECT COUNT(*) n FROM kv WHERE key GLOB 'milestone_cleanup:*' AND json_extract(value,'$.attempts')>=3").get() as {n:number};
   if (cleanupFailed.n) alerts.push({kind:'milestone_cleanup_failed',severity:'error',
     message:`${cleanupFailed.n} 条旧倍率汇总删除失败，已暂停对应信号的新倍率推送，请检查删除权限。`});
+  const derived=db.prepare('SELECT COUNT(*) n,MIN(created_at) oldest FROM position_jobs').get() as {n:number;oldest:number|null};
+  if(derived.oldest!==null&&nowSec-derived.oldest>60)alerts.push({kind:'positions_stalled',severity:'warn',
+    message:`持仓计算积压 ${derived.n} 项，最早等待 ${nowSec-derived.oldest} 秒；相关信号暂缓，原始采集继续。`});
+  const costs=db.prepare('SELECT created_at FROM cost_invalidation_job LIMIT 1').get() as {created_at:number}|undefined;
+  if(costs&&nowSec-costs.created_at>60)alerts.push({kind:'cost_revocation_pending',severity:'warn',
+    message:'缺口影响仍在后台处理，信号资格判断暂缓，原始采集继续。'});
   const failed = db.prepare("SELECT COUNT(*) AS n FROM push_tasks WHERE status='failed' AND attempts>=max_attempts").get() as { n: number };
   if (failed.n > 0) alerts.push({ kind: 'push_exhausted', severity: 'error', message: `推送重试已耗尽 ${failed.n} 条` });
   if (getKv(db, 'research_enabled') === true && nowSec - started > 600) {

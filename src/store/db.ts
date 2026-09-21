@@ -19,6 +19,7 @@ export function applySchema(db: Db): void {
   // CREATE TABLE IF NOT EXISTS 不会升级已存在的表；新增字段允许旧记录为空。
   db.transaction(() => {
     for (const [table, columns] of Object.entries({
+      cost_invalidation_job: { phase: 'INTEGER NOT NULL DEFAULT 0' },
       source_health: { head_ts: 'INTEGER' },
       signals: { send_snapshot: 'TEXT', display_wallets: 'TEXT' },
       position_checkpoints: { cycle_started_at: 'INTEGER', last_buy_ts: 'INTEGER', last_sell_ts: 'INTEGER' },

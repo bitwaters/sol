@@ -36,3 +36,8 @@ export async function measureAsync<T>(name: string, operation: () => Promise<T>)
   try { return await operation(); }
   finally { runtimeMetrics.observe(name, performance.now() - start); }
 }
+
+export function measureSync<T>(name: string, operation: () => T): T {
+  const start=performance.now();
+  try { return operation(); } finally { runtimeMetrics.observe(name,performance.now()-start); }
+}

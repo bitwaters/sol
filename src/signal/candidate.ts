@@ -1,3 +1,4 @@
+import { derivedPending } from '../store/derived-work.js';
 import { captureFeatures, fresh } from '../backtest/features.js';
 import { saveLiveQuality, validPrice } from '../backtest/quality.js';
 import { measureAsync } from '../ops/metrics.js';
@@ -375,6 +376,7 @@ export async function revalidateSignalForSend(
     | undefined;
   if (!signal || signal.status !== (updateOnly ? 'pushed' : 'sending')) return { ok: false, reason: 'not_sending' };
 
+  if (derivedPending(db,signal.token)) return {ok:false,reason:'derived_pending'};
   const gaps = checkIntegrity(db, ['smartmoney', 'kol', 'follow'], now);
   if (gaps.blocked) return { ok: false, reason: 'integrity_gap' };
 
@@ -433,6 +435,7 @@ export async function revalidateSignalForSend(
   if (!updateOnly && nowAfter - statusNow.triggered_at > 3600) {
     return { ok: false, reason: 'candidate_expired' };
   }
+  if (derivedPending(db,signal.token)) return {ok:false,reason:'derived_pending'};
   const integrityNow = checkIntegrity(db, ['smartmoney', 'kol', 'follow'], nowAfter);
   if (integrityNow.blocked) {
     return { ok: false, reason: 'integrity_gap' };
@@ -557,6 +560,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
     pushTaskCreated: false,
   };
 
+  if (derivedPending(db,token)) return {...base,status:'deferred',reason:'derived_pending'};
   if (getKv<boolean>(db, `rebuild_paused:${token}`) === true) {
     return { ...base, status: 'deferred', reason: 'rebuild_in_progress' };
   }
@@ -668,6 +672,7 @@ async function evaluateTokenOnce(deps: EngineDeps, token: string): Promise<Evalu
     return { ...base, status: 'suppressed_enrich_failed', signalId: existing?.id ?? null, reason: 'enrich_failed' };
   }
   now = Math.floor((deps.now?.() ?? Date.now()) / 1000);
+  if (derivedPending(db,token)) return {...base,status:'deferred',reason:'derived_pending'};
   expireStaleCandidates(db, token, now, config.signal.windowMinutes, config.tradeFilter.minTradeAmountUsd);
   retriggerUntil = getKv<number>(db, `retrigger:${token}`) ?? 0;
   existing = findReusableSignal(db, token, now);

@@ -1,3 +1,4 @@
+import { derivedPending } from '../store/derived-work.js';
 import { createHash } from 'node:crypto';
 import type { AppConfig } from '../config.js';
 import type { Logger } from '../logger.js';
@@ -13,7 +14,7 @@ export function exitChanges(db:Db,config:AppConfig,signalId:number,now:number,bl
   const empty:ExitChanges={keys:[],consensus:0,other:0,corrections:0,eventAt:null};
   const signal=db.prepare(`SELECT s.token,s.sent_at,t.created_at FROM signals s LEFT JOIN tokens t ON t.address=s.token
     WHERE s.id=? AND s.status='pushed' AND s.tg_message_id IS NOT NULL`).get(signalId) as {token:string;sent_at:number|null;created_at:number|null}|undefined;
-  if(!signal||signal.sent_at===null||now-signal.sent_at>86400||(signal.created_at!==null&&now-signal.created_at>86400))return empty;
+  if(!signal||derivedPending(db,signal.token)||signal.sent_at===null||now-signal.sent_at>86400||(signal.created_at!==null&&now-signal.created_at>86400))return empty;
   type Row={wallet:string;cycle_no:number;cluster_id:string|null;joined_at:number|null;state:string|null;last_sell_ts:number|null};
   const rows=db.prepare(`SELECT sw.wallet,sw.cycle_no,sw.cluster_id,sw.joined_at,p.state,p.last_sell_ts
     FROM signal_wallets sw LEFT JOIN wallet_positions p ON p.wallet=sw.wallet AND p.token=? AND p.cycle_no=sw.cycle_no
@@ -58,10 +59,11 @@ export function exitSignature(changes:ExitChanges):string {
 /** Coalesce pending changes; the first exit reply is sent once, then edited in place. */
 export function runExitMonitor(deps:ExitMonitorDeps):number {
   const {db,config}=deps,now=Math.floor((deps.now?.()??Date.now())/1000);
-  const signals=db.prepare(`SELECT s.id FROM signals s LEFT JOIN tokens t ON t.address=s.token
-    WHERE s.status='pushed' AND s.sent_at>=? AND s.tg_message_id IS NOT NULL AND (t.created_at IS NULL OR t.created_at>=?)`).all(now-86400,now-86400) as {id:number}[];
+  const signals=db.prepare(`SELECT s.id,s.token FROM signals s LEFT JOIN tokens t ON t.address=s.token
+    WHERE s.status='pushed' AND s.sent_at>=? AND s.tg_message_id IS NOT NULL AND (t.created_at IS NULL OR t.created_at>=?)`).all(now-86400,now-86400) as {id:number;token:string}[];
   let created=0;
-  for(const {id} of signals){
+  for(const {id,token} of signals){
+    if(derivedPending(db,token))continue;
     const changes=exitChanges(db,config,id,now,deps.blacklist,true),anchor=exitMessage(db,id);
     if((!changes.keys.length&&!anchor)||anchor?.signature===exitSignature(changes))continue;
     const res=db.prepare(`INSERT INTO push_tasks(signal_id,kind,alert_type,revision,dedupe_key,payload,status,created_at,updated_at)

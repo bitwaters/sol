@@ -1,3 +1,4 @@
+import { measureSync } from '../../ops/metrics.js';
 import { Decimal } from 'decimal.js';
 import type { Db } from '../db.js';
 import { normalizeTrackItem, type NormalizedTrade, type TradeSource } from '../../ingest/normalize.js';
@@ -157,10 +158,10 @@ export function ingestBatch(
   onInserted?: (inserted: NormalizedTrade[]) => void,
 ): IngestResult {
   const run = db.transaction((): IngestResult => {
-    const result = upsertTrades(db, source, trades, now);
-    upsertSourceHealth(db, healthPatch, now);
+    const result = measureSync(`poll.store.${source}`,()=>upsertTrades(db, source, trades, now));
+    measureSync(`poll.health.${source}`,()=>upsertSourceHealth(db, healthPatch, now));
     if (onInserted && result.insertedTrades.length + result.updatedTrades.length > 0) {
-      onInserted([...result.insertedTrades, ...result.updatedTrades].sort((a, b) => a.timestamp - b.timestamp || a.eventId.localeCompare(b.eventId)));
+      measureSync(`poll.enqueue.${source}`,()=>onInserted([...result.insertedTrades, ...result.updatedTrades].sort((a, b) => a.timestamp - b.timestamp || a.eventId.localeCompare(b.eventId))));
     }
     return { ...result, health: getSourceHealth(db, source) };
   });

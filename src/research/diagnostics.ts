@@ -1,3 +1,4 @@
+import { derivedPending } from '../store/derived-work.js';
 import { Decimal } from 'decimal.js';
 import type { AppConfig } from '../config.js';
 import { CACHE_TTL } from '../enrich/token.js';
@@ -115,16 +116,18 @@ export function diagnose(snapshot: FrozenSnapshot, config: AppConfig = snapshot.
     });
     flag('freshWallets','钱包画像完整且新鲜',window.votingWallets.every(w => { const p = getWalletProfile(db,w);
       return p && p.walletCreatedAt !== null && fresh(p.refreshedAt,at,WALLET_PROFILE_TTL_SEC); }) ? true : null);
+    const pending=derivedPending(db,token);
+    flag('positionsReady','持仓计算已完成',pending?null:true);
     flag('positionTime','持仓时间可核验', snapshot.tables.wallet_positions!.every(p=>p.last_trade_ts==null||Number(p.last_trade_ts)<=at) ? true : null);
     const tokenResult = quote ? validateTokenSnapshot({ db,config,token,nowSec: at,validWallets: original.validWallets,
       gateway: { fetchTokenInfo: async()=>null,fetchTokenSecurity: async()=>null } },quote) : null;
     // Input quality is independent of a rule-derived metric being unavailable (e.g. no eligible cost basis).
-    const inputKeys=['ageMinutes','marketCap','holders','liquidity','top10','bundler','insider','entrapment','bot','freshWallet','devHold','snipers','mint','freeze','positionTime'];
+    const inputKeys=['ageMinutes','marketCap','holders','liquidity','top10','bundler','insider','entrapment','bot','freshWallet','devHold','snipers','mint','freeze','positionTime','positionsReady'];
     const complete = inputKeys.every(k=>checks[k]!.status!=='unknown') && checks.freshToken!.status === 'pass' && checks.freshWallets!.status === 'pass';
     return { windowStart: window.windowStart, checks, wallets: details, rawVotes: window.votes, validVotes, warn: ratio !== null && ratio > config.signalValidation.warnPriceAboveEntry, strong: validVotes >= config.signal.strongWallets,
       sources: [...new Set(window.wallets.flatMap(w=>w.sources))].sort(), complete,
       eligible: Object.values(checks).every(c=>c.status==='pass'||c.status==='na'),
-      productionStatus: original.status !== 'pass' ? original.status : tokenResult?.status ?? 'deferred',
-      productionReason: original.reason ?? tokenResult?.reason ?? null };
+      productionStatus: pending ? 'deferred' : original.status !== 'pass' ? original.status : tokenResult?.status ?? 'deferred',
+      productionReason: pending ? 'derived_pending' : original.reason ?? tokenResult?.reason ?? null };
   } finally { db.close(); }
 }

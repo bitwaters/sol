@@ -4,7 +4,7 @@ import { getSourceHealth, upsertSourceHealth, type SourceHealth } from '../store
 import { ingestBatch, findCanonicalEventId } from '../store/repo/trades.js';
 import { RateLimitedError } from './gateway.js';
 import { normalizeTrackResponse, type NormalizedTrade, type TradeSource } from './normalize.js';
-import { runtimeMetrics } from '../ops/metrics.js';
+import { runtimeMetrics, measureAsync } from '../ops/metrics.js';
 
 export interface PollerDeps {
   source: TradeSource;
@@ -70,7 +70,9 @@ export class Poller {
 
   private schedule(delayMs: number): void {
     if (this.stopped) return;
+    const due=performance.now()+Math.max(0,delayMs);
     this.timer = setTimeout(() => {
+      runtimeMetrics.observe(`poll.schedule_delay.${this.deps.source}`,Math.max(0,performance.now()-due));
       this.timer = null;
       void this.tick().then((result) => this.schedule(result.nextIntervalMs));
     }, Math.max(0, delayMs));
@@ -119,10 +121,10 @@ export class Poller {
     const initialWatermark = getSourceHealth(db, source).watermark_ts;
 
     do {
-      const data = await this.deps.fetchPage({
+      const data = await measureAsync(`poll.fetch.${source}`,()=>this.deps.fetchPage({
         limit,
         ...(nextToken ? { nextPageToken: nextToken } : {}),
-      });
+      }));
       pages += 1;
       const trades = normalizeTrackResponse(source, data);
       const repeatedPage = trades.length > 0 && trades.every(trade => seenEvents.has(trade.eventId));

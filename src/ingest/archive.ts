@@ -91,6 +91,10 @@ export function archiveAndPrune(db: Db, options: ArchiveOptions): ArchiveResult 
   const result: ArchiveResult = { days: 0, archivedTrades: 0, deletedTrades: 0, files: [] };
 
   for (const { day, n } of days) {
+    if(db.prepare(`SELECT 1 FROM position_jobs j JOIN trades t ON t.maker=j.wallet AND t.base_address=j.token
+      WHERE date(t.timestamp,'unixepoch')=? LIMIT 1`).get(day)) {
+      logger?.warn('存在待处理持仓，暂缓相关日期归档');continue;
+    }
     const filePath = join(archiveDir, archiveFileName(day));
 
     // 合并已有归档（兼容旧版本的部分日归档），按 event_id 去重；读取失败则跳过该日
