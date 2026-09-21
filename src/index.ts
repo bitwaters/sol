@@ -1,3 +1,4 @@
+import { observeMilestones } from './telegram/milestones.js';
 import { createResearchSchedule } from './research/scheduler.js';
 import { advanceResearchExperiments } from './research/exploration.js';
 import { captureDelivery } from './research/delivery.js';
@@ -235,6 +236,7 @@ async function main(): Promise<void> {
   runControls();
   const exitTimer = setInterval(() => {
     try {
+      observeMilestones(db, Math.floor(Date.now() / 1000));
       const created = runExitMonitor({
         db,
         config,

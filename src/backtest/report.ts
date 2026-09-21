@@ -1,3 +1,4 @@
+import { milestoneStats } from '../telegram/milestones.js';
 import { qualityOverview, qualityReportLines } from './quality-report.js';
 import { compareSamples } from './compare.js';
 import { reasonLabel, sourceLabel } from '../telegram/labels.js';
@@ -235,6 +236,7 @@ export function signalStatsSummary(db:Db,now=Math.floor(Date.now()/1000)):string
   const count=(kind:string)=>states.find(s=>s.kind===kind)?.n??0;
   return ['📊 正式信号概览（近24小时）',`首次信号：${row.recent??0} 条 · 历史累计 ${row.total} 条`,
     `状态变化提示：${count('escalate')} 条 · 退出汇总消息：${count('exit_alert')} 条`,
+    milestoneStats(db),
     '首次信号保持原文；退出状态在同一条引用消息内更新。',
     '研究采样及调参进度请查看 /research；详细价格统计通过“详细统计”查看。'].join('\n');
 }

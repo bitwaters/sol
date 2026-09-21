@@ -13,6 +13,7 @@ export interface TelegramApi {
     text: string,
     options?: SendMessageOptions,
   ): Promise<void>;
+  deleteMessage?(chatId: string, messageId: number): Promise<void>;
   answerCallbackQuery?(callbackId: string, text?: string): Promise<void>;
 }
 

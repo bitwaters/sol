@@ -58,6 +58,13 @@ export function grammySender(bot: Bot): TelegramApi {
         toTelegramError(err);
       }
     },
+    async deleteMessage(chatId: string, messageId: number) {
+      try { await bot.api.deleteMessage(chatId, messageId); }
+      catch (err) {
+        if (err instanceof Error && /message to delete not found/i.test(err.message)) return;
+        toTelegramError(err);
+      }
+    },
     async answerCallbackQuery(callbackId: string, text?: string) {
       await bot.api.answerCallbackQuery(callbackId, text ? { text } : undefined);
     },

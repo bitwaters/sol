@@ -31,12 +31,13 @@ export function captureDelivery(d:ResearchDeps){
     const related=db.prepare(`SELECT * FROM signals WHERE token IN (${tokens.map(()=>'?').join(',')}) ORDER BY id LIMIT 1001`).all(...tokens) as typeof signals;
     if(related.length>1000)throw new Error('frame_signal_limit');
     for(const snapshot of snapshots)for(const signal of related) {
-      const keys=['edit_last','warn','downgrade','partial','exit_done','exit_events','published_state','notification_reason','published_member_version','exit_message'].map(k=>`${k}:${signal.id}`);
+      const keys=['edit_last','warn','downgrade','partial','exit_done','exit_events','published_state','notification_reason','published_member_version','exit_message','milestone_baseline','milestone_progress','milestone_message','milestone_cleanup'].map(k=>`${k}:${signal.id}`);
       snapshot.tables.kv!.push(...db.prepare(`SELECT * FROM kv WHERE key IN (${keys.map(()=>'?').join(',')})`).all(...keys) as typeof signals);
     }
+    snapshots[0]!.tables.kv!.push(...db.prepare("SELECT * FROM kv WHERE key GLOB 'milestone_message:*' AND json_extract(value,'$.updatedAt')>=?").all(at-60) as typeof signals);
     const relatedIds=related.map(s=>s.id!),relatedMarks=relatedIds.map(()=>'?').join(',');
     const tasks=db.prepare(`SELECT * FROM push_tasks WHERE signal_id IN (${relatedMarks})
-      OR (status='sent' AND kind IN ('signal','escalate') AND updated_at>=?) LIMIT 2001`).all(...relatedIds,at-60) as FrozenSnapshot['tables'][string];
+      OR (status='sent' AND kind IN ('signal','escalate','milestone') AND updated_at>=?) LIMIT 2001`).all(...relatedIds,at-60) as FrozenSnapshot['tables'][string];
     if(tasks.length>2000)throw new Error('frame_history_limit');
     // Recent sent tasks count against the same global budget. Their unrelated signals are not needed.
     const tables:FrozenSnapshot['tables']={signals:related,push_tasks:tasks,
@@ -76,7 +77,7 @@ export async function replayDelivery(data:Buffer,exp:DeliveryExperiment,transpor
       for(const row of rows){const keys=Object.keys(row);if(keys.some(k=>!cols.has(k)))throw new Error('invalid_delivery_column');
         db.prepare(`INSERT OR REPLACE INTO ${table} (${keys.join(',')}) VALUES (${keys.map(()=>'?').join(',')})`).run(...keys.map(k=>row[k]!));}
     }
-    let requests=0, sends=0,edits=0,id=1000000;
+    let requests=0, sends=0,edits=0,deletes=0,id=1000000;
     const observed=Object.assign({},...frame.snapshots.map(s=>s.observedBuys)) as Record<string,number>;
     for(const [wallet,count] of Object.entries(observed)){
       const present=(db.prepare("SELECT COUNT(*) n FROM trades WHERE maker=? AND side='buy' AND timestamp<=?").get(wallet,frame.at) as {n:number}).n;
@@ -99,11 +100,11 @@ export async function replayDelivery(data:Buffer,exp:DeliveryExperiment,transpor
     }
     if(exp.parameter==='consensusExit'||exp.parameter==='otherExit')runExitMonitor(deps);
     const result=await new Pusher({...deps,chatId:'offline',revalidate:s=>revalidateSignalForSend(deps,s),revalidateUpdate:s=>revalidateSignalForSend(deps,s,true),sender:{
-      sendMessage:async()=>{fail();sends++;return {message_id:id++};},editMessageText:async()=>{fail();edits++;},
+      sendMessage:async()=>{fail();sends++;return {message_id:id++};},editMessageText:async()=>{fail();edits++;},deleteMessage:async()=>{fail();deletes++;},
     }}).runOnce();
     const states=db.prepare('SELECT kind,status,COUNT(*) n FROM push_tasks GROUP BY kind,status').all();
     return {capturedAt:frame.at,evaluatedAt:at,experiment:exp,transport,verifiable:requests===0,missingRefreshRequests:requests,
-      simulatedSends:sends,simulatedEdits:edits,result,states,
+      simulatedSends:sends,simulatedEdits:edits,simulatedDeletes:deletes,result,states,
       limitation:'孤立时点的真实执行器回放；传输结果为指定情景。时间推进不补造新行情或成交，需刷新时结果标为不可验证。'};
   }finally{db.close();}
 }

@@ -56,3 +56,18 @@ it('grammy network errors are classified as uncertain delivery without copying t
     await expect(grammySender(bot).sendMessage('test-chat', 'test')).rejects.not.toThrow('synthetic request payload');
   } finally { db.close(); }
 });
+
+it('deletion is idempotent only for an already absent message and preserves real API errors', async () => {
+  const db = openDatabase({path:':memory:'});
+  try {
+    const bot = createBot('test-token',{db,config,logger:log,adminIds:[]});
+    const remove = vi.spyOn(bot.api,'deleteMessage');
+    remove.mockResolvedValueOnce(true);
+    await grammySender(bot).deleteMessage!('channel',101);
+    expect(remove).toHaveBeenCalledWith('channel',101);
+    remove.mockRejectedValueOnce(new Error('Bad Request: message to delete not found'));
+    await expect(grammySender(bot).deleteMessage!('channel',101)).resolves.toBeUndefined();
+    remove.mockRejectedValueOnce(new Error("Bad Request: message can't be deleted"));
+    await expect(grammySender(bot).deleteMessage!('channel',101)).rejects.toThrow("can't be deleted");
+  } finally { db.close(); }
+});

@@ -1,3 +1,4 @@
+import { observeMilestones, deliverMilestone, cleanupMilestones } from './milestones.js';
 import { captureFeatures, fresh } from '../backtest/features.js';
 import { saveLiveQuality, validPrice } from '../backtest/quality.js';
 import { measureAsync, runtimeMetrics } from '../ops/metrics.js';
@@ -56,7 +57,7 @@ interface TaskRow {
   id: number;
   created_at: number;
   signal_id: number;
-  kind: 'signal' | 'escalate' | 'exit_alert';
+  kind: 'signal' | 'escalate' | 'exit_alert' | 'milestone';
   alert_type: string | null;
   revision: number;
   payload: string;
@@ -254,10 +255,13 @@ export class Pusher {
 
     runExitMonitor({db,config,logger,now:this.now,...(this.deps.blacklist?{blacklist:this.deps.blacklist}:{})});
 
-    // 重启/崩溃恢复：卡在 sending 超过 10s 的任务转 unknown（可重试）
+    observeMilestones(db, nowSec);
+    await cleanupMilestones(db, measureTelegram(this.deps.sender), this.now, logger);
+
+    // 崩溃恢复：倍率新发和首次退出送达不明时停止补发，其他任务保持有限重试。
     db.prepare(
       `UPDATE push_tasks SET status = 'unknown', updated_at = ?,
-         attempts=CASE WHEN kind='exit_alert' AND tg_message_id IS NULL THEN max_attempts ELSE attempts END
+         attempts=CASE WHEN kind='milestone' OR (kind='exit_alert' AND tg_message_id IS NULL) THEN max_attempts ELSE attempts END
        WHERE status = 'sending' AND updated_at < ?`,
     ).run(nowSec, nowSec - 10);
 
@@ -267,7 +271,10 @@ export class Pusher {
          WHERE status = 'sent' AND kind IN ('signal','escalate') AND updated_at >= ?`,
       )
       .get(nowSec - 60) as { n: number };
-    let budget = Math.max(0, config.push.maxPerMinute - sentRecently.n);
+    // Milestone tasks are reused while pending; count durable send receipts, not task status.
+    const milestoneRecent = db.prepare("SELECT COUNT(*) n FROM kv WHERE key GLOB 'milestone_message:*' AND json_extract(value,'$.updatedAt')>=?")
+      .get(nowSec - 60) as {n:number};
+    let budget = Math.max(0, config.push.maxPerMinute - sentRecently.n - milestoneRecent.n);
 
     const tasks = db
       .prepare(
@@ -276,7 +283,7 @@ export class Pusher {
          WHERE t.status = 'pending'
             OR (t.status IN ('failed','unknown') AND t.attempts < t.max_attempts
                 AND (t.next_retry_at IS NULL OR t.next_retry_at <= ?))
-         ORDER BY CASE t.kind WHEN 'exit_alert' THEN 0 WHEN 'escalate' THEN 1 ELSE 2 END,
+         ORDER BY CASE t.kind WHEN 'exit_alert' THEN 0 WHEN 'escalate' THEN 1 WHEN 'signal' THEN 2 ELSE 3 END,
                   CASE WHEN s.wallet_count >= ? THEN 0 ELSE 1 END,
                   t.created_at, t.id
          LIMIT 200`,
@@ -350,6 +357,18 @@ export class Pusher {
     const sender = measureTelegram(this.deps.sender);
 
     try {
+      if (task.kind === 'milestone') {
+        const outcome = await deliverMilestone(db, sender, task.signal_id, chatId, this.now);
+        nowSec = Math.floor(this.now() / 1000);
+        if (outcome === 'sent') {
+          const message = getKv<{messageId:number}>(db, `milestone_message:${task.signal_id}`)!;
+          db.prepare("UPDATE push_tasks SET status='sent',tg_message_id=?,attempts=attempts+1,updated_at=? WHERE id=?")
+            .run(message.messageId, nowSec, task.id);
+          await cleanupMilestones(db, sender, this.now, logger);
+        } else if (outcome === 'cancelled') this.cancelTask(task, nowSec, 'milestone_inactive_or_delivered');
+        else db.prepare("UPDATE push_tasks SET status='pending',updated_at=? WHERE id=?").run(nowSec, task.id);
+        return outcome;
+      }
       if (task.kind === 'signal' || task.kind === 'escalate') {
         const signal = db
           .prepare('SELECT * FROM signals WHERE id = ?')
@@ -536,6 +555,8 @@ export class Pusher {
             db.prepare('DELETE FROM sample_quality WHERE signal_id=?').run(task.signal_id);
             db.prepare('DELETE FROM outcome_quality WHERE signal_id=?').run(task.signal_id);
             const quoteTs = measurement.tokenMetrics?.priceUpdatedAt ?? null;
+            setKv(db, `milestone_baseline:${signal.id}`, { price: validPrice(view.currentPrice) && fresh(quoteTs, nowSec, 60)
+              && Number(measurement.tokenMetrics?.price) === Number(view.currentPrice) ? view.currentPrice : null, sentAt: nowSec }, nowSec);
             if (validPrice(view.currentPrice) && fresh(quoteTs, nowSec, 60)
               && Number(measurement.tokenMetrics?.price) === Number(view.currentPrice)) {
               saveLiveQuality(db, task.signal_id, nowSec, String(view.currentPrice), quoteTs, measurement,
@@ -597,7 +618,8 @@ export class Pusher {
     } catch (err) {
       nowSec = Math.floor(this.now() / 1000);
       const uncertainFirstExit = err instanceof TelegramDeliveryUnknownError && task.kind==='exit_alert' && !exitMessage(db,task.signal_id);
-      const attempts = uncertainFirstExit ? task.max_attempts : task.attempts + 1;
+      const uncertainMilestone = err instanceof TelegramDeliveryUnknownError && task.kind==='milestone';
+      const attempts = uncertainFirstExit || uncertainMilestone ? task.max_attempts : task.attempts + 1;
       if (err instanceof TelegramRateLimitError) {
         const retryAt = nowSec + Math.max(err.retryAfterSec, 1);
         db.prepare(

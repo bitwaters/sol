@@ -199,7 +199,7 @@ CREATE TABLE IF NOT EXISTS kv (
 CREATE TABLE IF NOT EXISTS push_tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   signal_id INTEGER NOT NULL,
-  kind TEXT NOT NULL,               -- signal | escalate | exit_alert（summary 暂不实现）
+  kind TEXT NOT NULL,               -- signal | escalate | exit_alert | milestone
   alert_type TEXT,                  -- consensus_exit | other_cluster_exit
   revision INTEGER DEFAULT 0,
   dedupe_key TEXT NOT NULL UNIQUE,
