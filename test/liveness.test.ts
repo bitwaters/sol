@@ -148,3 +148,22 @@ it('does not label an enabled source that has never responded as healthy after s
     expect(db.prepare('SELECT from_ts,to_ts FROM source_outages').get()).toEqual({from_ts:1000,to_ts:1061});
   } finally {db.close();}
 });
+
+it('coalesces simultaneous source outages and does not rewrite unchanged flags during recovery', () => {
+  const s=scenario(),at=s.deps.now()/1000;
+  try {
+    setKv(s.db,'service_started_at',at);
+    for(const source of ['kol','follow'])upsertSourceHealth(s.db,{source,last_success_at:at},at);
+    setKv(s.db,'enabled_sources',['kol','follow']);
+    recordSourceOutages(s.db,at+100);
+    expect(s.db.prepare('SELECT COUNT(*) n FROM source_outages').get()).toEqual({n:2});
+    const flag=s.db.prepare("SELECT updated_at FROM kv WHERE key='gap_affected:T:w1'").get();
+    upsertSourceHealth(s.db,{source:'kol',last_success_at:at+101},at+101);
+    expect(getKv(s.db,'gap_affected_until:T:w1')).toBe(at+100);
+    expect(checkIntegrity(s.db,[],at+101).blocked).toBe(true);
+    upsertSourceHealth(s.db,{source:'follow',last_success_at:at+102},at+102);
+    expect(getKv(s.db,'gap_affected_until:T:w1')).toBe(at+102);
+    expect(s.db.prepare("SELECT updated_at FROM kv WHERE key='gap_affected:T:w1'").get()).toEqual(flag);
+    expect(checkIntegrity(s.db,[],at+102).blocked).toBe(false);
+  } finally {s.db.close();}
+});

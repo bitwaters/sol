@@ -14,25 +14,31 @@ export function staleSources(db: Db, now: number): Array<{source:string;from:num
 function invalidateCosts(db: Db, until: number, now: number): void {
   const relevant = "state IN ('open','unknown','incomplete') AND (cycle_started_at IS NULL OR cycle_started_at<=?)";
   db.prepare(`INSERT INTO kv(key,value,updated_at)
-    SELECT 'gap_affected:'||token||':'||wallet,'true',? FROM wallet_positions WHERE ${relevant}
-    ON CONFLICT(key) DO UPDATE SET value='true',updated_at=excluded.updated_at`).run(now, until);
+    SELECT DISTINCT 'gap_affected:'||token||':'||wallet,'true',? FROM wallet_positions WHERE ${relevant}
+    ON CONFLICT(key) DO UPDATE SET value='true',updated_at=excluded.updated_at WHERE kv.value!='true'`).run(now, until);
   db.prepare(`INSERT INTO kv(key,value,updated_at)
-    SELECT 'gap_affected_until:'||token||':'||wallet,CAST(? AS TEXT),? FROM wallet_positions WHERE ${relevant}
-    ON CONFLICT(key) DO UPDATE SET value=CAST(MAX(CAST(kv.value AS INTEGER),CAST(excluded.value AS INTEGER)) AS TEXT),updated_at=excluded.updated_at`)
+    SELECT DISTINCT 'gap_affected_until:'||token||':'||wallet,CAST(? AS TEXT),? FROM wallet_positions WHERE ${relevant}
+    ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+      WHERE CAST(kv.value AS INTEGER)<CAST(excluded.value AS INTEGER)`)
     .run(until, now, until);
-  db.prepare(`UPDATE wallet_positions SET cost_complete=0,confidence=0.3 WHERE ${relevant}`).run(until);
+  db.prepare(`UPDATE wallet_positions SET cost_complete=0,confidence=0.3 WHERE ${relevant}
+    AND (cost_complete!=0 OR confidence!=0.3)`).run(until);
 }
-function recordOutage(db: Db, source: string, from: number, now: number, recovered: boolean): void {
+function recordOutage(db: Db, source: string, from: number, now: number, recovered: boolean): boolean {
   const existing = db.prepare('SELECT 1 FROM source_outages WHERE source=? AND recovered_at IS NULL').get(source);
   db.prepare(`INSERT INTO source_outages(source,from_ts,to_ts) VALUES (?,?,?)
     ON CONFLICT(source) WHERE recovered_at IS NULL DO UPDATE SET from_ts=MIN(from_ts,excluded.from_ts),to_ts=MAX(to_ts,excluded.to_ts)`)
     .run(source, from, now);
-  if (!existing || recovered) invalidateCosts(db, now, now);
   if (recovered) db.prepare('UPDATE source_outages SET recovered_at=? WHERE source=? AND recovered_at IS NULL').run(now, source);
+  return !existing;
 }
 /** Called before polling starts and independently every 30s, even while a request is stuck. */
 export function recordSourceOutages(db: Db, now: number): void {
-  db.transaction(() => { for (const row of staleSources(db, now)) recordOutage(db, row.source, row.from, now, false); })();
+  db.transaction(() => {
+    let discovered = false;
+    for (const row of staleSources(db, now)) discovered = recordOutage(db, row.source, row.from, now, false) || discovered;
+    if (discovered) invalidateCosts(db, now, now);
+  })();
 }
 
 export interface SourceHealth {
@@ -74,7 +80,11 @@ export function upsertSourceHealth(
     if (patch.last_success_at != null && (getKv<string[]>(db, 'enabled_sources') ?? []).includes(patch.source)) {
       const from = current.last_success_at ?? getKv<number>(db, 'service_started_at') ?? now;
       const open = db.prepare('SELECT from_ts FROM source_outages WHERE source=? AND recovered_at IS NULL').get(patch.source) as {from_ts:number}|undefined;
-      if (open || now - from > SOURCE_STALE_SEC) recordOutage(db, patch.source, open?.from_ts ?? from, now, true);
+      if (open || now - from > SOURCE_STALE_SEC) {
+        recordOutage(db, patch.source, open?.from_ts ?? from, now, true);
+        // Other stale sources still block every signal. Final recovery revokes through the complete interval once.
+        if (!staleSources(db,now).some(s=>s.source!==patch.source)) invalidateCosts(db, now, now);
+      }
     }
     const next: SourceHealth = {
       ...current,
