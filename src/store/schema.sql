@@ -37,6 +37,9 @@ CREATE INDEX IF NOT EXISTS idx_trades_token_ts ON trades(base_address, timestamp
 CREATE INDEX IF NOT EXISTS idx_trades_maker_ts ON trades(maker, timestamp);
 CREATE INDEX IF NOT EXISTS idx_trades_tx ON trades(tx_hash);
 CREATE INDEX IF NOT EXISTS idx_trades_created ON trades(created_at);
+-- Keep the research sampler and observed-buy counts off large raw-response table pages.
+CREATE INDEX IF NOT EXISTS idx_trades_research_window ON trades(chain,side,timestamp,base_address,maker,amount_usd_num);
+CREATE INDEX IF NOT EXISTS idx_trades_maker_side_ts ON trades(maker,side,timestamp);
 
 -- 同一事件的多来源观测（只累计来源标签，不重复计金额）
 CREATE TABLE IF NOT EXISTS trade_sources (

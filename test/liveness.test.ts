@@ -167,3 +167,16 @@ it('coalesces simultaneous source outages and does not rewrite unchanged flags d
     expect(checkIntegrity(s.db,[],at+102).blocked).toBe(false);
   } finally {s.db.close();}
 });
+
+it('uses bounded covering indexes for sampling and observed-buy counts on databases with large raw responses', () => {
+  const s=scenario(),at=s.deps.now()/1000;
+  try {
+    const sample=s.db.prepare(`EXPLAIN QUERY PLAN SELECT base_address token,COUNT(DISTINCT CASE WHEN amount_usd_num>=? THEN maker END) votes
+      FROM trades WHERE chain='sol' AND side='buy' AND timestamp BETWEEN ? AND ? AND amount_usd_num>0
+      GROUP BY base_address HAVING MAX(timestamp)>=?`).all(300,at-900,at,at-120) as {detail:string}[];
+    expect(sample.some(r=>r.detail.includes('SEARCH trades USING COVERING INDEX idx_trades_research_window'))).toBe(true);
+    const counts=s.db.prepare("EXPLAIN QUERY PLAN SELECT COUNT(*) FROM trades WHERE maker=? AND side='buy' AND timestamp<=?")
+      .all('w1',at) as {detail:string}[];
+    expect(counts.some(r=>r.detail.includes('COVERING INDEX idx_trades_maker_side_ts'))).toBe(true);
+  } finally {s.db.close();}
+});
