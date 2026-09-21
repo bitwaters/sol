@@ -7,6 +7,7 @@
  */
 
 import { createRequire } from "node:module";
+import { withDeadline } from '../deadline.js';
 
 import { buildAuthQuery, buildMessage, detectAlgorithm, sign } from "./signer.js";
 
@@ -641,17 +642,16 @@ export class OpenApiClient {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       const request = prepare();
-      const res = await this.doFetch(
-        request.method,
-        request.subPath,
-        request.url,
-        request.headers,
-        request.body,
-        request.curlStr
-      );
-
       try {
-        return await this.parseResponse(request.method, request.subPath, res, request.curlStr);
+        return await withDeadline(async (signal) => {
+          const res = await this.doFetch(request.method, request.subPath, request.url, request.headers,
+            request.body, request.curlStr, signal);
+          if (signal.aborted) {
+            void res.body?.cancel().catch(() => undefined);
+            throw signal.reason;
+          }
+          return await this.parseResponse(request.method, request.subPath, res, request.curlStr);
+        }, this.timeoutMs);
       } catch (err) {
         const retryDelayMs = getRateLimitRetryDelayMs(err, attempt, maxAttempts, autoRetryOnRateLimit);
         if (retryDelayMs == null) {
@@ -676,10 +676,11 @@ export class OpenApiClient {
     url: string,
     headers: Record<string, string>,
     body: string | null,
-    curlStr: string
+    curlStr: string,
+    signal: AbortSignal
   ): Promise<Response> {
     try {
-      return await fetch(url, { method, headers, body: body ?? undefined, signal: AbortSignal.timeout(this.timeoutMs) });
+      return await fetch(url, { method, headers, body: body ?? undefined, signal });
     } catch (err: unknown) {
       const cause = extractRootCause(err);
       const errorCode = (cause as NodeJS.ErrnoException).code;

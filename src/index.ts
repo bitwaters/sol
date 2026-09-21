@@ -9,7 +9,7 @@ import { EvaluationScheduler } from './signal/scheduler.js';
 import { runtimeMetrics } from './ops/metrics.js';
 import { evaluateOutcomes } from './backtest/evaluate.js';
 import { sendDailyReport } from './backtest/report.js';
-import { backupDatabase, sendOpsAlerts } from './ops/alerts.js';
+import { backupDatabaseOnline, collectOpsAlerts, sendOpsAlerts } from './ops/alerts.js';
 import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,6 +29,7 @@ import { createBot, grammySender, registerBotCommands } from './telegram/bot.js'
 import { runExitMonitor } from './telegram/exit-monitor.js';
 import { Pusher } from './telegram/pusher.js';
 import { getKv, openDatabase, setKv, type Db } from './store/db.js';
+import { recordSourceOutages } from './store/repo/health.js';
 
 const log = createLogger({ module: 'main' });
 
@@ -49,6 +50,9 @@ async function main(): Promise<void> {
   setKv(db, 'service_started_at', Math.floor(Date.now() / 1000));
   setKv(db, 'runtime_metrics', null);
   setKv(db, 'enabled_sources', ['smartmoney', 'kol', ...(env.GMGN_PRIVATE_KEY ? ['follow'] : [])]);
+  setKv(db, 'research_enabled', research.config.enabled);
+  // Preserve evidence of downtime before the first successful poll can advance its timestamp.
+  recordSourceOutages(db, Math.floor(Date.now() / 1000));
 
   const ratePerSecond = env.GMGN_RATE_LIMIT_PER_SEC;
   if (env.GMGN_PROXY) setGlobalDispatcher(new ProxyAgent(env.GMGN_PROXY));
@@ -180,6 +184,19 @@ async function main(): Promise<void> {
   const archiveStartupTimer = setTimeout(runArchive, 10_000);
   const archiveTimer = setInterval(runArchive, 6 * 3600_000);
   const shutdownHooks: Array<() => void> = [];
+  let activeOps = new Set<string>();
+  const healthTimer = setInterval(() => {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      recordSourceOutages(db, now);
+      const alerts = collectOpsAlerts(db, {nowSec:now,gatewayBannedUntilMs:gateway.bannedUntil});
+      const next = new Set(alerts.map(a=>a.kind));
+      for (const alert of alerts) if (!activeOps.has(alert.kind)) log.warn('运行健康异常', {kind:alert.kind,message:alert.message});
+      for (const kind of activeOps) if (!next.has(kind)) log.info('运行健康恢复', {kind});
+      activeOps = next;
+    } catch (error) { log.error('健康检查失败', {error}); }
+  }, 30_000);
+  shutdownHooks.push(() => clearInterval(healthTimer));
   const metricsTimer = setInterval(() => {
     const snapshot = { timestamp: Math.floor(Date.now() / 1000), metrics: runtimeMetrics.snapshot() };
     setKv(db, 'runtime_metrics', snapshot);
@@ -227,20 +244,19 @@ async function main(): Promise<void> {
     }
   }, 60_000);
   let lastBackupDay = '';
+  let backingUp = false;
   const backupTimer = setInterval(() => {
     const d = new Date();
     const day = d.toISOString().slice(0, 10);
-    if (d.getUTCHours() === 9 && lastBackupDay !== day) {
-      try {
-        backupDatabase(db, join(dataDir, 'backups'), {
+    if (d.getUTCHours() === 9 && lastBackupDay !== day && !backingUp) {
+      backingUp = true;
+      void backupDatabaseOnline(db, join(dataDir, 'backups'), {
           now: d,
           retentionDays: 7,
           logger: log.child({ module: 'backup' }),
-        });
-        lastBackupDay = day;
-      } catch (err) {
-        log.error('数据库备份失败', { error: err });
-      }
+        }).then(() => { lastBackupDay = day; })
+        .catch((error:unknown) => log.error('数据库备份失败', {error}))
+        .finally(() => { backingUp = false; });
     }
   }, 60_000);
   const maintenanceTimer = setInterval(() => {

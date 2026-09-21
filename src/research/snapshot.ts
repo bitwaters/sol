@@ -50,7 +50,9 @@ export function freezeSnapshot(db: Db, token: string, at: number, config: AppCon
   tables.data_gaps = db.prepare('SELECT * FROM data_gaps WHERE from_ts<=? AND to_ts>=?')
     .all(at, Math.min(at - research.windowMinutes * 60, ...trades.map(t=>Number(t.timestamp)))) as Row[];
   tables.source_health = db.prepare('SELECT * FROM source_health').all() as Row[];
-  tables.kv = db.prepare(`SELECT * FROM kv WHERE key IN ('quality_tracking_started_at','observation_started_at','paused',?,?,?,?)`)
+  tables.source_outages = db.prepare('SELECT * FROM source_outages WHERE from_ts<=? AND to_ts>=?')
+    .all(at, Math.min(at - research.windowMinutes * 60, ...trades.map(t=>Number(t.timestamp)))) as Row[];
+  tables.kv = db.prepare(`SELECT * FROM kv WHERE key IN ('quality_tracking_started_at','observation_started_at','enabled_sources','service_started_at','paused',?,?,?,?)`)
     .all(`mute:${token}`, `rebuild_paused:${token}`, `hardblock:${token}`, `retrigger:${token}`) as Row[];
   for(const maker of makers)tables.kv.push(...db.prepare('SELECT * FROM kv WHERE key IN (?,?)')
     .all(`gap_affected:${token}:${maker}`,`gap_affected_until:${token}:${maker}`) as Row[]);
@@ -59,7 +61,7 @@ export function freezeSnapshot(db: Db, token: string, at: number, config: AppCon
 }
 export const pack = (snapshot: FrozenSnapshot): Buffer => gzipSync(JSON.stringify(snapshot));
 export const unpack = (data: Buffer): FrozenSnapshot => JSON.parse(gunzipSync(data).toString('utf8')) as FrozenSnapshot;
-const allowed = new Set(['trades','tokens','trade_sources','wallet_positions','position_checkpoints','wallets','data_gaps','source_health','kv']);
+const allowed = new Set(['trades','tokens','trade_sources','wallet_positions','position_checkpoints','wallets','data_gaps','source_outages','source_health','kv']);
 export function restoreSnapshot(snapshot: FrozenSnapshot): Db {
   const db = openDatabase({ path: ':memory:' });
   try {

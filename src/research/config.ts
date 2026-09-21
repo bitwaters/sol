@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { PROJECT_ROOT } from '../config.js';
 
-export const RESEARCH_VERSION = 'research-2026-09-15.3';
+export const RESEARCH_VERSION = 'research-2026-09-21.1';
 const schema = z.strictObject({
   enabled: z.boolean(), intervalSec: z.number().int().min(30),
   maxPerStratum: z.number().int().min(1).max(10), maxPending: z.number().int().min(1).max(100),

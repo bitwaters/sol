@@ -1,4 +1,14 @@
 -- Meme 信号 Bot 数据模型（SQLite）
+-- Wall-clock intervals with no successful response from an enabled source.
+CREATE TABLE IF NOT EXISTS source_outages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL,
+  from_ts INTEGER NOT NULL,
+  to_ts INTEGER NOT NULL,
+  recovered_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_source_outage_open ON source_outages(source) WHERE recovered_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_source_outage_range ON source_outages(from_ts,to_ts);
 -- 与 docs/DEVELOPMENT.md §6 保持一致；所有时间戳为 unix 秒（除 push_tasks 调度用毫秒见注释）
 
 -- 成交事件（买卖双边；金额/数量按事件只累计一次）

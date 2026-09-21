@@ -1,5 +1,5 @@
 import { getKv, setKv } from '../store/db.js';
-import { getSourceHealth, upsertSourceHealth } from '../store/repo/health.js';
+import { getSourceHealth, staleSources, upsertSourceHealth } from '../store/repo/health.js';
 import type { Db } from '../store/db.js';
 
 /** 缺口阻塞窗口：超过该时长的缺口按"不可观测"接受（§5.2） */
@@ -68,6 +68,9 @@ export function checkIntegrity(
   maxAgeSec = GAP_BLOCK_WINDOW_SEC,
 ): IntegrityResult {
   const recentGaps: GapInfo[] = [];
+  // A source that has stopped cannot age out of the safety gate after ten minutes.
+  for (const row of staleSources(db, nowSec)) recentGaps.push({ source: row.source, gapFrom: row.from,
+    gapTo: nowSec, updatedAt: nowSec, ageSec: nowSec - row.from });
   const acceptedGaps: GapInfo[] = [];
   for (const source of [...new Set(sources)]) {
     const health = getSourceHealth(db, source);

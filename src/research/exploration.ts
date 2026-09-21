@@ -53,8 +53,14 @@ export function exploreResearch(db:Db,config:ResearchConfig,now=Math.floor(Date.
         r.d.windowStart!==undefined&&gapStatus(db,r.d.windowStart,r.s.anchor_at)==='clean');
       const classified=available.map(r=>({...r,next:classifyThreshold(r.d,experiment)}));
       const remainingBlockers:Record<string,{label:string;count:number}>={};
+      const blockerCombinations = new Map<string,{labels:string[];count:number}>();
       for(const r of classified.filter(r=>r.next.factorPass&&!r.next.eligible))for(const key of r.next.otherFailures){
         const blocker=remainingBlockers[key]??{label:r.d.checks[key]?.label??key,count:0};blocker.count++;remainingBlockers[key]=blocker;
+      }
+      for (const r of classified.filter(r=>r.next.factorPass&&!r.next.eligible)) {
+        const keys = [...r.next.otherFailures].sort(), key = JSON.stringify(keys);
+        const item = blockerCombinations.get(key) ?? {labels:keys.map(k=>r.d.checks[k]?.label??k),count:0};
+        item.count++; blockerCombinations.set(key,item);
       }
       const cells=['retained','changed'].map(group=>{
         const matching=classified.filter(r=>group==='retained'?r.d.eligible&&r.next.eligible:r.d.eligible!==r.next.eligible);
@@ -66,6 +72,7 @@ export function exploreResearch(db:Db,config:ResearchConfig,now=Math.floor(Date.
       return {source,selected:selected.length,inputComplete:available.length,baselineCoverage,
         factorPass:classified.filter(r=>r.next.factorPass).length,fullPass:classified.filter(r=>r.next.eligible).length,
         added:classified.filter(r=>!r.d.eligible&&r.next.eligible).length,cells,remainingBlockers,
+        blockerCombinations:[...blockerCombinations.values()].sort((a,b)=>b.count-a.count),
         trainingReady:baselineCoverage>=config.baselineCoverage&&cells.every(c=>c.valid>=config.minPerCell&&c.coverage>=config.outcomeCoverage)
           &&cells.reduce((n,c)=>n+c.valid,0)>=config.minIndependentTokens};
     });

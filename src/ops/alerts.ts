@@ -1,5 +1,5 @@
 import { sourceLabel, utcTime } from '../telegram/labels.js';
-import { readdirSync, statSync, unlinkSync, mkdirSync } from 'node:fs';
+import { readdirSync, statSync, unlinkSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Logger } from '../logger.js';
 import type { Db } from '../store/db.js';
@@ -77,6 +77,12 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
 
   const failed = db.prepare("SELECT COUNT(*) AS n FROM push_tasks WHERE status='failed' AND attempts>=max_attempts").get() as { n: number };
   if (failed.n > 0) alerts.push({ kind: 'push_exhausted', severity: 'error', message: `推送重试已耗尽 ${failed.n} 条` });
+  if (getKv(db, 'research_enabled') === true && nowSec - started > 600) {
+    const due = db.prepare("SELECT COUNT(*) n FROM research_outcomes WHERE state='pending' AND next_at<=?").get(nowSec) as {n:number};
+    const progress = db.prepare("SELECT MAX(checked_at) at FROM research_outcomes WHERE last_error IS NULL OR last_error!='background_busy'").get() as {at:number|null};
+    if (due.n > 0 && nowSec - (progress.at ?? started) > 600) alerts.push({ kind: 'research_stalled', severity: 'error',
+      message: `研究行情补采超过10分钟未完成检查，已到期积压 ${due.n} 项（最近检查：${utcTime(progress.at)}）` });
+  }
   return alerts;
 }
 
@@ -135,6 +141,28 @@ export function backupDatabase(
     } catch {
       // 忽略清理失败
     }
+  }
+  return path;
+}
+
+/** Incremental SQLite backup yields between chunks so requests and deadlines keep running. */
+export async function backupDatabaseOnline(db: Db, backupDir: string, options: {now?:Date;retentionDays?:number;logger?:Logger} = {}): Promise<string> {
+  const now = options.now ?? new Date();
+  mkdirSync(backupDir, { recursive: true });
+  const stamp = now.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const path = join(backupDir, `meme-${stamp}.sqlite`), partial = `${path}.partial`;
+  try {
+    await db.backup(partial, { progress: () => 64 });
+    renameSync(partial, path);
+  } catch (error) {
+    try { unlinkSync(partial); } catch { /* no incomplete backup is advertised */ }
+    throw error;
+  }
+  options.logger?.info('数据库在线备份完成', { path });
+  const cutoff = now.getTime() - (options.retentionDays ?? 7) * 86_400_000;
+  for (const name of readdirSync(backupDir)) {
+    if (!name.endsWith('.sqlite')) continue;
+    try { const file = join(backupDir,name); if (statSync(file).mtimeMs < cutoff) unlinkSync(file); } catch { /* retry next run */ }
   }
   return path;
 }

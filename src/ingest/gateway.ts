@@ -2,6 +2,7 @@ import type { OpenApiClient } from '../gmgn/OpenApiClient.js';
 import type { Logger } from '../logger.js';
 import { BanGate, TokenBucket } from './limiter.js';
 import { runtimeMetrics } from '../ops/metrics.js';
+import { withDeadline } from '../deadline.js';
 
 /** 端点权重（来源：GMGN 官方 skill 文档，§4.2） */
 export const ROUTE_WEIGHTS = {
@@ -61,6 +62,7 @@ export interface GmgnGatewayOptions {
   logger?: Logger;
   /** 注入时钟便于测试 */
   now?: () => number;
+  requestTimeoutMs?: number;
 }
 
 /**
@@ -75,6 +77,7 @@ export class GmgnGateway {
   private readonly now: () => number;
   private backgroundNextAt = 0;
   private backgroundInFlight = false;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: GmgnGatewayOptions) {
     this.client = options.client;
@@ -82,6 +85,7 @@ export class GmgnGateway {
     this.banGate = options.banGate;
     this.logger = options.logger;
     this.now = options.now ?? (() => Date.now());
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 20_000;
   }
 
   get isBanned(): boolean {
@@ -126,7 +130,7 @@ export class GmgnGateway {
     runtimeMetrics.observe(`gmgn.queue.${route}`, requestedAt - queuedAt);
     let outcome = 'ok';
     try {
-      return await fn(this.client);
+      return await withDeadline(() => fn(this.client), this.requestTimeoutMs);
     } catch (err) {
       outcome = 'error';
       const rateLimit = extractRateLimitInfo(err);

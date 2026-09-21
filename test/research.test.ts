@@ -41,6 +41,7 @@ describe('research snapshots and independent checks',()=>{
     const report=exploreResearch(s.db,research,s.at);
     const cohort=report.factors.find(f=>f.experiment.parameter==='validVotes'&&f.experiment.value===2)!.cohorts[0]!;
     expect(cohort).toMatchObject({factorPass:1,fullPass:0,remainingBlockers:{marketCap:{label:'代币市值',count:1}}});
+    expect(cohort.blockerCombinations).toEqual([{labels:['代币市值'],count:1}]);
     expect(report.walletAttribution).toMatchObject({observations:3,clear:3,legacy:0});
     const row=s.db.prepare('SELECT id,diagnostics FROM research_samples').get() as {id:number;diagnostics:string};
     const legacy=JSON.parse(row.diagnostics);for(const w of legacy.wallets){delete w.behaviorReasons;delete w.dataReasons;delete w.costState;}

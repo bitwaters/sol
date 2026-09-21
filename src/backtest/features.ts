@@ -6,6 +6,7 @@ import { validateTokenSnapshot } from '../signal/validate-token.js';
 import { validateWallets } from '../signal/validate-wallet.js';
 import { computeWindow } from '../signal/window.js';
 import { getKv, type Db } from '../store/db.js';
+import { staleSources } from '../store/repo/health.js';
 
 export const QUALITY_VERSION = 'measurement-2026-09-14.2';
 export function fresh(timestamp: number | null | undefined, now: number, ttl: number): boolean {
@@ -15,6 +16,8 @@ export function gapStatus(db: Db, start: number, end: number): 'clean' | 'affect
   // Conservatively exclude any source gap, even if recovered after this sample was selected.
   const gap = db.prepare('SELECT 1 FROM data_gaps WHERE from_ts<=? AND to_ts>=? LIMIT 1').get(end, start);
   if (gap) return 'affected';
+  if (db.prepare('SELECT 1 FROM source_outages WHERE from_ts<=? AND to_ts>=? LIMIT 1').get(end,start)) return 'affected';
+  if (staleSources(db,end).some(s=>s.from<=end)) return 'affected';
   const since = getKv<number>(db, 'quality_tracking_started_at');
   return since !== null && start >= since ? 'clean' : 'unknown';
 }
