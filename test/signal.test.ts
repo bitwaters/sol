@@ -172,7 +172,8 @@ describe('M2-3 窗口聚合', () => {
     const db = openDatabase({ path: ':memory:' });
     const now = Math.floor(Date.now() / 1000);
     insertTrade(db, { maker: 'w1', token: 'tw', side: 'buy', usd: 500, amount: 500, ts: now - 60, tx: 'w1a' });
-    insertTrade(db, { maker: 'w2', token: 'tw', side: 'buy', usd: 100, amount: 100, ts: now - 50, tx: 'w2a' });
+    const belowFloor = loaded.config.tradeFilter.minTradeAmountUsd / 2;
+    insertTrade(db, { maker: 'w2', token: 'tw', side: 'buy', usd: belowFloor, amount: belowFloor, ts: now - 50, tx: 'w2a' });
     insertTrade(db, { maker: 'w2', token: 'tw', side: 'sell', usd: 50, amount: 50, ts: now - 40, tx: 'w2b' });
 
     const clusters = buildClusters(db, 'tw', ['w1', 'w2'], {
@@ -182,8 +183,8 @@ describe('M2-3 窗口聚合', () => {
       excludeFunderLabels: ['cex'],
     });
     const win = computeWindow(db, 'tw', now, loaded.config, clusters);
-    expect(win.votes).toBe(1); // w2 的 100 < 300 门槛
-    expect(win.netInflowUsd.toString()).toBe('550'); // 500+100-50
+    expect(win.votes).toBe(1); // w2 的买入金额低于当前计票门槛
+    expect(win.netInflowUsd.toNumber()).toBe(500 + belowFloor - 50); // 小额买入和卖出仍计入净流入
     db.close();
   });
 });

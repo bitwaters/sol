@@ -651,7 +651,7 @@ pushed 信号不适用过期规则，保持 pushed；监控何时结束按 §7.6
  ├─ 4. 有效票数 < minValidWallets(3) → 信号失效（status=invalidated）
  ├─ 5. requireOpenAction：有效票中至少 1 个钱包的**当前周期首笔买入在窗口内**（action=open；簇内任一钱包满足即算）→ 不满足则失效
  ├─ 6. requireAtLeastOneSmartMoney：至少 1 票来自 smartmoney（簇内任一钱包满足即算）→ 不满足则失效
- ├─ 7. 窗口净流入（口径见 §7.1，含全部大小额买卖）≥ netInflowUsd.min(2000) → 不满足则失效
+ ├─ 7. 窗口净流入（口径见 §7.1，含全部大小额买卖）≥ netInflowUsd.min(500) → 不满足则失效
  └─ 8. 可核验性门槛：有效票中 `state=open` 且 `cost_complete=1` 的钱包数
         < minVerifiableWallets(2) → 暂缓推送（有限重试）；窗口过期仍不足 → expired
         通过后计算持仓保留率 = Σ(周期买入量 − 周期卖出量) / Σ(周期买入量)
@@ -763,8 +763,8 @@ pushed 信号不适用过期规则，保持 pushed；监控何时结束按 §7.6
   "tradeFilter": {
     "sides": ["buy"],                 // 仅买入触发信号；卖出全量入库用于持仓跟踪与退出监控
     "actions": ["open", "add"],       // 计入共识的买入行为（open=建仓，add=加仓）
-    "minTradeAmountUsd": 300,         // 仅用于买入计票资格；净流入不设金额门槛
-    "netInflowUsd": { "min": 2000, "max": null },  // 窗口净流入（全部买卖，Σ买入−Σ卖出）
+    "minTradeAmountUsd": 50,          // 仅用于买入计票资格；净流入不设金额门槛
+    "netInflowUsd": { "min": 500, "max": null },  // 窗口净流入（全部买卖，Σ买入−Σ卖出）
     "walletCount": { "max": null }    // 计票数上限；下限由 signal.minDistinctWallets 控制
   },
 
@@ -859,7 +859,7 @@ pushed 信号不适用过期规则，保持 pushed；监控何时结束按 §7.6
 |---|---|---|
 | `windowMinutes: 15` | 2 周信号按窗口分桶 | 15min 桶的 1h 价格变化中位数 > 5min/30min 桶 |
 | `minDistinctWallets: 3` | 按票数分桶 | ≥3 票显著优于 2 票；3 票与 4+ 票差距可接受 |
-| `minTradeAmountUsd: 300` | 单笔金额分桶 | 剔除小额后信号表现提升 |
+| `minTradeAmountUsd: 50` | 单笔金额分桶 | 比较不同小额过滤门槛下的信号表现 |
 | `ageMinutes: 5~360` | 年龄分桶 | 5~60min 桶最好；>6h 桶无 alpha 则收紧 |
 | `marketCapUsd: 15K~200K` | 市值分桶 | 区间内表现显著优于区间外 |
 | `maxEntrapmentRate` / `maxBotDegenRate` | 按诱捕/机器人占比分桶 | 高占比组表现显著更差则收紧 |

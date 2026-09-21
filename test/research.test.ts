@@ -66,10 +66,11 @@ describe('research snapshots and independent checks',()=>{
     s.db.prepare('UPDATE tokens SET top10_rate=0').run();expect(diagnose(s.freeze()).checks.top10?.status).toBe('pass');
   });
   it('replays window/amount/clustering without modifying production configuration',async()=>{
-    const s=await setup(),f=s.freeze();expect(replay(f,{parameter:'minTradeAmount',value:2000}).rawVotes).toBe(0);
+    const s=await setup(),f=s.freeze(),originalFloor=f.config.tradeFilter.minTradeAmountUsd;
+    expect(replay(f,{parameter:'minTradeAmount',value:2000}).rawVotes).toBe(0);
     expect(replay(f,{parameter:'windowMinutes',value:1}).rawVotes).toBe(0);
     expect(()=>replay(f,{parameter:'windowMinutes',value:61})).toThrow('window_exceeds_snapshot');
-    expect(f.config.tradeFilter.minTradeAmountUsd).toBe(300);
+    expect(f.config.tradeFilter.minTradeAmountUsd).toBe(originalFloor);
     s.db.prepare("UPDATE wallets SET fund_from_address='shared',wallet_created_at=?").run(s.at-30*86400);
     expect(diagnose(s.freeze()).rawVotes).toBe(1);expect(replay(s.freeze(),{parameter:'clusterMerge',value:false}).rawVotes).toBe(3);
   });
@@ -81,7 +82,8 @@ describe('research snapshots and independent checks',()=>{
 });
 describe('research sampling and budget',()=>{
   it('samples below the production amount floor and respects persistent cadence',async()=>{
-    const s=await setup();s.db.prepare('UPDATE trades SET amount_usd=\'100\',amount_usd_num=100').run();
+    const s=await setup(),belowFloor=s.d.config.tradeFilter.minTradeAmountUsd/2;
+    s.db.prepare('UPDATE trades SET amount_usd=?,amount_usd_num=?').run(String(belowFloor),belowFloor);
     expect(reserveResearch(s.d)).toBe(1);expect(reserveResearch(s.d)).toBe(0);applySchema(s.db);expect(reserveResearch(s.d)).toBe(0);
     await collectResearch(s.d);expect((s.db.prepare('SELECT state FROM research_samples').get() as {state:string}).state).toBe('ready');
     expect((researchOverview(s.db).totals as {samples:number}).samples).toBe(1);
@@ -205,7 +207,8 @@ it('background wallet enrichment can acquire weight three without exceeding a ca
 
 describe('active sampling and measurement remediation',()=>{
   it('reserves a low-amount control stratum and separates candidates with qualified buyers',async()=>{
-    const s=await setup();s.db.prepare("UPDATE trades SET base_address='low',amount_usd='100',amount_usd_num=100 WHERE maker='w3'").run();
+    const s=await setup(),belowFloor=s.d.config.tradeFilter.minTradeAmountUsd/2;
+    s.db.prepare("UPDATE trades SET base_address='low',amount_usd=?,amount_usd_num=? WHERE maker='w3'").run(String(belowFloor),belowFloor);
     expect(reserveResearch(s.d)).toBe(2);
     expect(s.db.prepare('SELECT token,stratum FROM research_samples ORDER BY stratum').all()).toEqual([{token:'low',stratum:0},{token:'T',stratum:2}]);
   });

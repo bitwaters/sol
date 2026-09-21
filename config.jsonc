@@ -14,8 +14,8 @@
   "tradeFilter": {
     "sides": ["buy"],
     "actions": ["open", "add"],
-    "minTradeAmountUsd": 300,
-    "netInflowUsd": { "min": 2000, "max": null },
+    "minTradeAmountUsd": 50,
+    "netInflowUsd": { "min": 500, "max": null },
     "walletCount": { "max": null }
   },
 
