@@ -1201,3 +1201,5 @@ DRY_RUN=0                # 1=只打印不推送
 缺口/停采影响改为持久化 `cost_invalidation_job`，按持仓状态索引分批撤销成本资格，每批最多100条；跳过大量已关闭历史周期，每批之间让出事件循环。整个撤销任务完成前阻止相关资格判断；缺口延伸重置扫描进度，保留最晚影响边界。新成交入队时持久化当时缺口影响，避免等待期间缺口被接受后丢失污染标记。待处理钱包涉及的归档日期暂缓清理。
 
 轮询频率、全局请求限流、60秒心跳阈值和10分钟缺口阻塞窗口保持不变。监测新增 `poll.fetch`、`poll.store`、`poll.health`、`poll.enqueue`、`poll.schedule_delay`，后台监测 `derived.position.run/queue`、`derived.cost.run`；超过60秒的后台积压单独通知管理员。持仓后台任务按项让出事件循环，不意味着单个超长历史重放完全不会阻塞，需持续用这些指标评估。
+
+事务尾部的 SQLite 自动检查点也可能阻塞采集主线程。运行时在独立 Worker 连接中每5秒执行一次 PASSIVE 检查点，Worker 就绪后才关闭主连接的自动检查点；仍保持既有 NORMAL 同步级别。仅在包含 WAL-reset 修复的 SQLite 3.51.3 及之后版本启用。Worker 失败或检查点超过30秒未完成时回退自动检查点并告警，未回写日志过大单独告警。`storage.wal_checkpoint` 与 `wal_checkpoint` 保存耗时和进度；不手工删除 WAL 文件。原理见 [SQLite WAL 性能说明](https://www.sqlite.org/wal.html#performance_considerations)。

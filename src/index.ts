@@ -1,3 +1,4 @@
+import { startWalCheckpoint } from './store/wal-checkpoint.js';
 import { enqueuePositions, startDerivedWorker } from './signal/derived-worker.js';
 import { observeMilestones } from './telegram/milestones.js';
 import { createResearchSchedule } from './research/scheduler.js';
@@ -50,6 +51,7 @@ async function main(): Promise<void> {
   const dataDir = join(PROJECT_ROOT, 'data');
   mkdirSync(dataDir, { recursive: true });
   const db = openDatabase({ path: join(dataDir, 'meme.sqlite') });
+  const walCheckpoint=startWalCheckpoint(db,join(dataDir,'meme.sqlite'),log);
   const bootAt=Math.floor(Date.now()/1000);
   const planned=getKv<{requestedAt:number;expiresAt:number}>(db,'planned_restart');
   if(planned&&planned.expiresAt>=bootAt)setKv(db,'last_planned_restart',{requestedAt:planned.requestedAt,startedAt:bootAt},bootAt);
@@ -417,6 +419,7 @@ async function main(): Promise<void> {
     for (const poller of pollers) poller.stop();
     evaluationScheduler.stop();
     stopDerivedWorker();
+    void walCheckpoint.stop();
     closeDb(db);
     process.exit(0);
   };

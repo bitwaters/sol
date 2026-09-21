@@ -86,6 +86,10 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
   const cleanupFailed = db.prepare("SELECT COUNT(*) n FROM kv WHERE key GLOB 'milestone_cleanup:*' AND json_extract(value,'$.attempts')>=3").get() as {n:number};
   if (cleanupFailed.n) alerts.push({kind:'milestone_cleanup_failed',severity:'error',
     message:`${cleanupFailed.n} 条旧倍率汇总删除失败，已暂停对应信号的新倍率推送，请检查删除权限。`});
+  if(getKv(db,'wal_checkpoint_failed')===true)alerts.push({kind:'wal_checkpoint_failed',severity:'warn',
+    message:'后台数据库检查点异常，已回退自动检查点，可能增加采集延迟。'});
+  const wal=getKv<{at:number;logPages:number;checkpointedPages:number}>(db,'wal_checkpoint');
+  if(wal&&wal.logPages-wal.checkpointedPages>65536)alerts.push({kind:'wal_backlog',severity:'warn',message:'数据库日志待回写量较大，请检查长时间读取或磁盘性能。'});
   const derived=db.prepare('SELECT COUNT(*) n,MIN(created_at) oldest FROM position_jobs').get() as {n:number;oldest:number|null};
   if(derived.oldest!==null&&nowSec-derived.oldest>60)alerts.push({kind:'positions_stalled',severity:'warn',
     message:`持仓计算积压 ${derived.n} 项，最早等待 ${nowSec-derived.oldest} 秒；相关信号暂缓，原始采集继续。`});
