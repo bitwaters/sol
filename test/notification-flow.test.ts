@@ -149,7 +149,7 @@ it('keeps a single pending exit update while many fresh events arrive',async()=>
 });
 it('does not fall back to new messages if editing the exit summary fails',async()=>{
   const s=await setup();s.setNow(s.at+4);close(s,'w1',s.at+1);await push(s);
-  close(s,'w2',s.at+5);s.setNow(s.at+35);s.sender.editMessageText.mockRejectedValueOnce(new Error('message cannot be edited'));
+  close(s,'w2',s.at+5);s.setNow(s.at+35);s.sender.editMessageText.mockRejectedValueOnce(new Error('temporary transport failure'));
   expect((await push(s)).failed).toBe(1);expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
   s.setNow(s.at+100);expect((await push(s)).sent).toBe(1);
   expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);expect(s.sender.editMessageText).toHaveBeenCalledTimes(2);
@@ -175,4 +175,117 @@ it('does not resend a first exit when Telegram delivery is uncertain',async()=>{
   expect((await push(s)).failed).toBe(1);s.setNow(s.at+200);
   expect((await push(s)).sent).toBe(0);expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
   expect(collectOpsAlerts(s.db,{nowSec:s.at+200}).some(a=>a.kind==='exit_delivery_unknown')).toBe(true);
+});
+
+it('coalesces all consensus transitions into one persistent referenced card',async()=>{
+  const s=await setup(),original=s.db.prepare('SELECT tg_message_id,sent_at,send_snapshot FROM signals WHERE id=?').get(s.id);
+  s.setNow(s.at+10);s.db.prepare('UPDATE signals SET wallet_count=5 WHERE id=?').run(s.id);queue(s);await push(s);
+  s.setNow(s.at+15);s.db.prepare('UPDATE signals SET wallet_count=2 WHERE id=?').run(s.id);queue(s);
+  expect((await push(s)).deferred).toBe(1);expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
+  s.setNow(s.at+41);expect((await push(s)).sent).toBe(1);
+  expect(s.sender.editMessageText.mock.calls[0]?.slice(0,2)).toEqual(['channel',101]);
+  expect(s.sender.editMessageText.mock.calls[0]?.[2]).toContain('共识减弱');
+  s.setNow(s.at+72);queue(s,{downgraded:true,reason:'integrity_gap'});await push(s);
+  expect(s.sender.editMessageText.mock.calls.at(-1)?.[2]).toContain('数据暂不可核验');
+  s.setNow(s.at+103);queue(s);await push(s);
+  expect(s.sender.editMessageText.mock.calls.at(-1)?.[2]).toContain('共识恢复');
+  expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
+  expect(s.db.prepare('SELECT tg_message_id,sent_at,send_snapshot FROM signals WHERE id=?').get(s.id)).toEqual(original);
+  expect(s.db.prepare("SELECT COUNT(DISTINCT tg_message_id) n FROM push_tasks WHERE kind='escalate' AND status='sent'").get()).toEqual({n:1});
+});
+it('reuses the earliest legacy state reply, excluding legacy edits to the original',async()=>{
+  const s=await setup();s.setNow(s.at+100);s.db.prepare('UPDATE signals SET wallet_count=5 WHERE id=?').run(s.id);
+  for(const [i,id] of [100,701,702].entries())s.db.prepare("INSERT INTO push_tasks(signal_id,kind,dedupe_key,payload,status,tg_message_id,created_at,updated_at) VALUES (?,'escalate',?,'{}','sent',?,?,?)")
+    .run(s.id,'old'+i,id,s.at+i,s.at+i);
+  queue(s);expect((await push(s)).sent).toBe(1);
+  expect(s.sender.sendMessage).not.toHaveBeenCalled();expect(s.sender.editMessageText.mock.calls[0]?.[1]).toBe(701);
+});
+it('a failed state edit retries the same card and never falls back to sending',async()=>{
+  const s=await setup();s.db.prepare('UPDATE signals SET wallet_count=5 WHERE id=?').run(s.id);queue(s);await push(s);
+  s.setNow(s.at+31);s.db.prepare('UPDATE signals SET wallet_count=2 WHERE id=?').run(s.id);queue(s);
+  s.sender.editMessageText.mockRejectedValueOnce(new Error('network'));
+  expect((await push(s)).failed).toBe(1);s.setNow(s.at+92);expect((await push(s)).sent).toBe(1);
+  expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);expect(s.sender.editMessageText.mock.calls.map(c=>c[1])).toEqual([101,101]);
+});
+it('an uneditable card blocks future revisions and reports a concrete cause',async()=>{
+  const {collectOpsAlerts}=await import('../src/ops/alerts.js');
+  const s=await setup();s.db.prepare('UPDATE signals SET wallet_count=5 WHERE id=?').run(s.id);queue(s);await push(s);
+  s.setNow(s.at+31);s.db.prepare('UPDATE signals SET wallet_count=2 WHERE id=?').run(s.id);queue(s);
+  s.sender.editMessageText.mockRejectedValueOnce(new Error('Bad Request: message to edit not found'));
+  expect((await push(s)).cancelled).toBe(1);s.setNow(s.at+100);queue(s);await push(s);
+  expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);expect(s.sender.editMessageText).toHaveBeenCalledTimes(1);
+  expect(collectOpsAlerts(s.db,{nowSec:s.at+100}).find(a=>a.kind==='reply_unavailable')?.message).toContain('汇总卡片不存在或不可编辑');
+  expect(collectOpsAlerts(s.db,{nowSec:s.at+100}).some(a=>a.kind==='push_exhausted')).toBe(false);
+});
+it('a missing original is terminal and does not consume three futile retries',async()=>{
+  const s=await setup();s.db.prepare('UPDATE signals SET wallet_count=5 WHERE id=?').run(s.id);queue(s);
+  s.sender.sendMessage.mockRejectedValueOnce(new Error('Bad Request: message to be replied not found'));
+  expect((await push(s)).cancelled).toBe(1);s.setNow(s.at+100);queue(s);await push(s);
+  expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);expect(getKv(s.db,`reply_block:${s.id}:escalate`)).toMatchObject({category:'original_missing'});
+});
+it.each(['transport','crash'])('blocks new state revisions after uncertain first delivery (%s)',async mode=>{
+  const {TelegramDeliveryUnknownError}=await import('../src/telegram/types.js');
+  const {collectOpsAlerts}=await import('../src/ops/alerts.js');
+  const s=await setup();s.db.prepare('UPDATE signals SET wallet_count=5 WHERE id=?').run(s.id);queue(s);
+  if(mode==='transport'){
+    s.sender.sendMessage.mockRejectedValueOnce(new TelegramDeliveryUnknownError());await push(s);
+  }else s.db.prepare("UPDATE push_tasks SET status='sending',updated_at=? WHERE kind='escalate'").run(s.at-20);
+  s.setNow(s.at+100);await push(s);queue(s);await push(s);
+  expect(s.sender.sendMessage).toHaveBeenCalledTimes(mode==='transport'?1:0);
+  expect(collectOpsAlerts(s.db,{nowSec:s.at+100}).some(a=>a.kind==='state_delivery_unknown')).toBe(true);
+  close(s,'w1',s.at+101);s.setNow(s.at+102);await push(s);
+  expect(collectOpsAlerts(s.db,{nowSec:s.at+102}).some(a=>a.kind==='state_delivery_unknown')).toBe(true);
+});
+it('an uncertain state edit is safely retried without sending',async()=>{
+  const {TelegramDeliveryUnknownError}=await import('../src/telegram/types.js');
+  const s=await setup();s.db.prepare('UPDATE signals SET wallet_count=5 WHERE id=?').run(s.id);queue(s);await push(s);
+  s.setNow(s.at+31);s.db.prepare('UPDATE signals SET wallet_count=2 WHERE id=?').run(s.id);queue(s);
+  s.sender.editMessageText.mockRejectedValueOnce(new TelegramDeliveryUnknownError());expect((await push(s)).failed).toBe(1);
+  s.setNow(s.at+100);expect((await push(s)).sent).toBe(1);expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
+});
+it('recovers an exhausted legacy state send once as an edit to a confirmed reply',async()=>{
+  const s=await setup();s.db.prepare("DELETE FROM kv WHERE key='state_card_migration_v1'").run();
+  s.db.prepare("INSERT INTO push_tasks(signal_id,kind,dedupe_key,payload,status,tg_message_id,created_at,updated_at) VALUES (?,'escalate','legacy','{}','sent',701,?,?)").run(s.id,s.at-40,s.at-40);
+  s.db.prepare('UPDATE signals SET wallet_count=5 WHERE id=?').run(s.id);queue(s);
+  s.db.prepare("UPDATE push_tasks SET status='failed',attempts=max_attempts WHERE kind='escalate' AND status='pending'").run();
+  expect((await push(s)).sent).toBe(1);expect(s.sender.sendMessage).not.toHaveBeenCalled();expect(s.sender.editMessageText.mock.calls[0]?.[1]).toBe(701);
+  s.db.prepare("UPDATE push_tasks SET status='failed',attempts=max_attempts WHERE dedupe_key='update1'").run();
+  expect((await push(s)).processed).toBe(0); // migration never loops
+});
+it('archives obsolete definite failures but preserves unknown delivery',async()=>{
+  const {reconcileReplyFailures}=await import('../src/telegram/delivery-failures.js');
+  const s=await setup();queue(s);s.db.prepare("UPDATE push_tasks SET status='failed',attempts=max_attempts WHERE kind='escalate'").run();
+  queue(s);s.db.prepare("UPDATE push_tasks SET status='unknown',attempts=max_attempts WHERE status='pending'").run();
+  reconcileReplyFailures(s.db,s.at+86401);
+  expect(s.db.prepare("SELECT status FROM push_tasks WHERE kind='escalate' ORDER BY id").all()).toEqual([{status:'cancelled'},{status:'unknown'}]);
+});
+it('rejects a corrupt summary anchor pointing to the immutable original',async()=>{
+  const s=await setup();setKv(s.db,`state_message:${s.id}`,{messageId:100,chatId:'channel',updatedAt:s.at-40});
+  s.db.prepare('UPDATE signals SET wallet_count=5 WHERE id=?').run(s.id);queue(s);
+  expect((await push(s)).cancelled).toBe(1);expect(s.sender.editMessageText).not.toHaveBeenCalled();expect(s.sender.sendMessage).not.toHaveBeenCalled();
+});
+it('stops recreating an exit task when its summary was permanently removed',async()=>{
+  const s=await setup();s.setNow(s.at+4);close(s,'w1',s.at+1);await push(s);
+  close(s,'w2',s.at+5);s.setNow(s.at+35);s.sender.editMessageText.mockRejectedValueOnce(new Error('message cannot be edited'));
+  expect((await push(s)).cancelled).toBe(1);s.setNow(s.at+100);expect((await push(s)).processed).toBe(0);
+  expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);expect(s.sender.editMessageText).toHaveBeenCalledTimes(1);
+});
+it('reports exhausted failure causes and uses queue-specific recovery wording',async()=>{
+  const {collectOpsAlerts}=await import('../src/ops/alerts.js');
+  const s=await setup();queue(s);
+  const row=s.db.prepare("SELECT id FROM push_tasks WHERE kind='escalate'").get() as {id:number};
+  s.db.prepare('UPDATE push_tasks SET status=\'failed\',attempts=max_attempts WHERE id=?').run(row.id);
+  setKv(s.db,`push_failure:${row.id}`,{category:'permission_or_chat'});
+  expect(collectOpsAlerts(s.db,{nowSec:s.at}).find(a=>a.kind==='push_exhausted')?.message).toContain('频道访问或机器人权限异常');
+  await sendOpsAlerts({db:s.db,sender:s.sender,logger:log,nowSec:s.at,chatId:'7'});
+  s.db.prepare("UPDATE push_tasks SET status='cancelled' WHERE id=?").run(row.id);
+  await sendOpsAlerts({db:s.db,sender:s.sender,logger:log,nowSec:s.at+1,chatId:'7'});
+  expect(s.sender.sendMessage.mock.calls.at(-1)?.[1]).toContain('不代表历史失败消息已补发');
+  expect(s.sender.sendMessage.mock.calls.at(-1)?.[1]).not.toContain('历史缺口');
+});
+it('preserves the no-resend guard when upgrading a legacy unknown state send',async()=>{
+  const s=await setup();s.db.prepare("DELETE FROM kv WHERE key='state_card_migration_v1'").run();queue(s);
+  s.db.prepare("UPDATE push_tasks SET status='unknown',attempts=max_attempts WHERE kind='escalate'").run();
+  await push(s);queue(s);await push(s);expect(s.sender.sendMessage).not.toHaveBeenCalled();
+  expect(getKv(s.db,`reply_block:${s.id}:escalate`)).toMatchObject({category:'delivery_unknown'});
 });

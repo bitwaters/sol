@@ -1,3 +1,4 @@
+import { replyBlocked } from './delivery-failures.js';
 import { Decimal } from 'decimal.js';
 import { fresh } from '../backtest/features.js';
 import { getQuality, validPrice } from '../backtest/quality.js';
@@ -51,6 +52,7 @@ export function observeMilestones(db: Db, now: number): void {
         progress.highest = tier;
         setKv(db, `milestone_progress:${s.id}`, progress, now);
       }
+      if(replyBlocked(db,s.id,'milestone'))continue;
       if (progress.highest <= (milestoneMessage(db, s.id)?.multiple ?? 1)) continue;
       db.prepare(`INSERT INTO push_tasks(signal_id,kind,dedupe_key,payload,status,created_at,updated_at)
         VALUES (?,'milestone',?,'{}','pending',?,?) ON CONFLICT(dedupe_key) DO UPDATE SET

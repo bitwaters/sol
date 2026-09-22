@@ -199,6 +199,7 @@ function createEscalateTask(
   patch: Record<string, unknown>,
   nowSec: number,
 ): boolean {
+  if(getKv(db,`reply_block:${signalId}:escalate`))return false;
   const run = db.transaction((): boolean => {
     const res = db
       .prepare(

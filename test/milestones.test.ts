@@ -154,3 +154,12 @@ it('blocks deletion when a corrupted cleanup record points to the original signa
   s.quote(2,70);await s.run();
   expect(s.sender.deleteMessage).not.toHaveBeenCalled();expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
 });
+
+it('keeps observing multiples when a missing original blocks further replies',async()=>{
+  const s=await setup();s.quote(1.5,10);
+  s.sender.sendMessage.mockRejectedValueOnce(new Error('Bad Request: message to be replied not found'));
+  expect((await s.run()).cancelled).toBe(1);
+  s.quote(3,80);await s.run();expect(s.sender.sendMessage).toHaveBeenCalledTimes(1);
+  expect(milestoneProgress(s.db,s.id)?.highest).toBe(3);
+  expect(milestoneElapsed(milestoneProgress(s.db,s.id)!,3)).toBe(80);
+});

@@ -4,6 +4,15 @@ import { reasonLabel, utcTime } from './labels.js';
 import { signalShortId, type SignalView } from './format.js';
 
 export interface PublishedState {votes:number;holding:number|null;condition:string;reason:string|null;}
+export interface StateMessage {messageId:number;chatId:string|null;updatedAt:number;}
+/** Reuse a confirmed reply from older deployments; never select the original signal. */
+export function stateMessage(db:Db,signalId:number):StateMessage|null {
+  return getKv<StateMessage>(db,`state_message:${signalId}`) ??
+    (db.prepare(`SELECT t.tg_message_id messageId,s.tg_chat_id chatId,t.updated_at updatedAt
+      FROM push_tasks t JOIN signals s ON s.id=t.signal_id WHERE t.signal_id=? AND t.kind='escalate'
+      AND t.status='sent' AND t.tg_message_id IS NOT NULL AND t.tg_message_id!=s.tg_message_id
+      ORDER BY t.id LIMIT 1`).get(signalId) as StateMessage|undefined) ?? null;
+}
 export function publishedState(db:Db,signalId:number):PublishedState {
   const saved=getKv<PublishedState>(db,`published_state:${signalId}`);if(saved)return saved;
   const row=db.prepare('SELECT send_snapshot,holding_ratio FROM signals WHERE id=?').get(signalId) as {send_snapshot:string|null;holding_ratio:number|null};
@@ -26,6 +35,6 @@ export function updateMessage(view:SignalView,previous:PublishedState,reason:str
     `有效票数：${previous.votes} → ${state.votes}`,
     `持仓保留率：${pct(previous.holding)} → ${pct(state.holding)}`,
     `原因：${reason?reasonLabel(reason):title}`,
-    `评估时间：${utcTime(at)}`,'本提示关联首次信号；原始消息保持不变。'].join('\n');
+    `评估时间：${utcTime(at)}`,'本条为共识状态汇总，后续变化更新此消息；首次信号保持不变。'].join('\n');
   return {state,text,changed};
 }

@@ -1,3 +1,4 @@
+import { failureLabels } from '../telegram/delivery-failures.js';
 import { sourceLabel, utcTime } from '../telegram/labels.js';
 import { readdirSync, statSync, unlinkSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
@@ -80,6 +81,13 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
   const unconfirmedExit=db.prepare("SELECT COUNT(*) n FROM push_tasks WHERE kind='exit_alert' AND status='unknown' AND tg_message_id IS NULL AND attempts>=max_attempts").get() as {n:number};
   if(unconfirmedExit.n)alerts.push({kind:'exit_delivery_unknown',severity:'error',
     message:`${unconfirmedExit.n} 条首次退出提醒送达结果不明，已停止自动补发以避免刷屏，请管理员核对频道。`});
+  const stateUnknown=db.prepare("SELECT COUNT(*) n FROM push_tasks WHERE kind='escalate' AND status='unknown' AND tg_message_id IS NULL AND attempts>=max_attempts").get() as {n:number};
+  if(stateUnknown.n)alerts.push({kind:'state_delivery_unknown',severity:'error',
+    message:`${stateUnknown.n} 条首次共识状态卡片送达结果不明，已停止该信号的新状态卡片，请管理员核对频道。`});
+  const blocked=db.prepare(`SELECT json_extract(k.value,'$.category') category,COUNT(*) n FROM kv k
+    JOIN signals s ON s.id=json_extract(k.value,'$.signalId') WHERE k.key GLOB 'reply_block:*'
+    AND json_extract(k.value,'$.category')!='delivery_unknown' AND s.sent_at>=? GROUP BY category`).all(nowSec-86400) as {category:string;n:number}[];
+  if(blocked.length)alerts.push({kind:'reply_unavailable',severity:'error',message:'回复卡片已停止更新：'+blocked.map(b=>`${failureLabels[b.category]??'目标不可用'} ${b.n} 张`).join('；')+'。不会新发替代卡片，请管理员核对。'});
   const milestoneUnknown = db.prepare("SELECT COUNT(*) n FROM push_tasks WHERE kind='milestone' AND status='unknown' AND attempts>=max_attempts").get() as {n:number};
   if (milestoneUnknown.n) alerts.push({kind:'milestone_delivery_unknown',severity:'error',
     message:`${milestoneUnknown.n} 条倍率汇总送达结果不明，已停止自动补发，请核对频道。`});
@@ -97,7 +105,13 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
   if(costs&&nowSec-costs.created_at>60)alerts.push({kind:'cost_revocation_pending',severity:'warn',
     message:'缺口影响仍在后台处理，信号资格判断暂缓，原始采集继续。'});
   const failed = db.prepare("SELECT COUNT(*) AS n FROM push_tasks WHERE status='failed' AND attempts>=max_attempts").get() as { n: number };
-  if (failed.n > 0) alerts.push({ kind: 'push_exhausted', severity: 'error', message: `推送重试已耗尽 ${failed.n} 条` });
+  if (failed.n > 0) {
+    const details=db.prepare(`SELECT t.id,t.signal_id,json_extract(k.value,'$.category') category FROM push_tasks t
+      LEFT JOIN kv k ON k.key='push_failure:'||t.id WHERE t.status='failed' AND t.attempts>=t.max_attempts ORDER BY t.id DESC LIMIT 5`)
+      .all() as {id:number;signal_id:number;category:string|null}[];
+    alerts.push({kind:'push_exhausted',severity:'error',message:`推送重试已耗尽 ${failed.n} 条\n`+
+      details.map(t=>`任务 ${t.id} · 信号 #${t.signal_id.toString(36).toUpperCase()}：${failureLabels[t.category??'']??'历史失败，需核对日志'}`).join('\n')});
+  }
   if (getKv(db, 'research_enabled') === true && nowSec - started > 600) {
     const due = db.prepare("SELECT COUNT(*) n FROM research_outcomes WHERE state='pending' AND next_at<=?").get(nowSec) as {n:number};
     const progress = db.prepare("SELECT MAX(checked_at) at FROM research_outcomes WHERE last_error IS NULL OR last_error!='background_busy'").get() as {at:number|null};
@@ -140,7 +154,7 @@ export async function sendOpsAlerts(deps: {
   const active = new Set(alerts.map(a=>a.kind));
   for (const [kind,prior] of Object.entries(previous)) {
     if(active.has(kind))continue;
-    await deps.sender.sendMessage(deps.chatId, `✅ 异常已解除：${prior.message}\n确认时间：${utcTime(deps.nowSec)}\n历史缺口仍保留，不代表历史数据已补齐。`);
+    await deps.sender.sendMessage(deps.chatId, `✅ 异常已解除：${prior.message}\n确认时间：${utcTime(deps.nowSec)}\n${kind.startsWith('gap:')||kind.startsWith('heartbeat:')?'历史缺口仍保留，不代表历史数据已补齐。':kind.startsWith('push_')||kind.includes('delivery')||kind==='reply_unavailable'?'队列状态已更新；不代表历史失败消息已补发。':'当前检查已不再触发此告警。'}`);
     delete next[kind];setKv(deps.db,stateKey,next,deps.nowSec);sent++;
   }
   return sent;

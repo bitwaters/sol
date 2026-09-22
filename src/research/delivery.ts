@@ -31,9 +31,11 @@ export function captureDelivery(d:ResearchDeps){
     const related=db.prepare(`SELECT * FROM signals WHERE token IN (${tokens.map(()=>'?').join(',')}) ORDER BY id LIMIT 1001`).all(...tokens) as typeof signals;
     if(related.length>1000)throw new Error('frame_signal_limit');
     for(const snapshot of snapshots)for(const signal of related) {
-      const keys=['edit_last','warn','downgrade','partial','exit_done','exit_events','published_state','notification_reason','published_member_version','exit_message','milestone_baseline','milestone_progress','milestone_message','milestone_cleanup'].map(k=>`${k}:${signal.id}`);
+      const keys=['edit_last','warn','downgrade','partial','exit_done','exit_events','published_state','state_message','notification_reason','published_member_version','exit_message','milestone_baseline','milestone_progress','milestone_message','milestone_cleanup'].map(k=>`${k}:${signal.id}`);
+      keys.push(...['escalate','exit_alert','milestone'].map(kind=>`reply_block:${signal.id}:${kind}`));
       snapshot.tables.kv!.push(...db.prepare(`SELECT * FROM kv WHERE key IN (${keys.map(()=>'?').join(',')})`).all(...keys) as typeof signals);
     }
+    snapshots[0]!.tables.kv!.push(...db.prepare("SELECT * FROM kv WHERE key='state_card_migration_v1'").all() as typeof signals);
     snapshots[0]!.tables.kv!.push(...db.prepare("SELECT * FROM kv WHERE key GLOB 'milestone_message:*' AND json_extract(value,'$.updatedAt')>=?").all(at-60) as typeof signals);
     const relatedIds=related.map(s=>s.id!),relatedMarks=relatedIds.map(()=>'?').join(',');
     const tasks=db.prepare(`SELECT * FROM push_tasks WHERE signal_id IN (${relatedMarks})

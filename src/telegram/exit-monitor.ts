@@ -1,3 +1,4 @@
+import { replyBlocked } from './delivery-failures.js';
 import { derivedPending } from '../store/derived-work.js';
 import { createHash } from 'node:crypto';
 import type { AppConfig } from '../config.js';
@@ -63,7 +64,7 @@ export function runExitMonitor(deps:ExitMonitorDeps):number {
     WHERE s.status='pushed' AND s.sent_at>=? AND s.tg_message_id IS NOT NULL AND (t.created_at IS NULL OR t.created_at>=?)`).all(now-86400,now-86400) as {id:number;token:string}[];
   let created=0;
   for(const {id,token} of signals){
-    if(derivedPending(db,token))continue;
+    if(derivedPending(db,token)||replyBlocked(db,id,'exit_alert'))continue;
     const changes=exitChanges(db,config,id,now,deps.blacklist,true),anchor=exitMessage(db,id);
     if((!changes.keys.length&&!anchor)||anchor?.signature===exitSignature(changes))continue;
     const res=db.prepare(`INSERT INTO push_tasks(signal_id,kind,alert_type,revision,dedupe_key,payload,status,created_at,updated_at)

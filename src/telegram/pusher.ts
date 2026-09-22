@@ -7,7 +7,8 @@ import { measureTelegram } from './telemetry.js';
 import { TelegramDeliveryUnknownError } from './types.js';
 import type { CexBlacklist } from '../enrich/wallet.js';
 import { exitChanges, runExitMonitor, exitMessage, exitSignature } from './exit-monitor.js';
-import { publishedState, updateMessage } from './updates.js';
+import { blockReply, replyBlocked, reconcileReplyFailures, telegramFailureCategory } from './delivery-failures.js';
+import { publishedState, stateMessage, updateMessage } from './updates.js';
 import { utcTime } from './labels.js';
 import { boundHoldingRatio } from '../signal/members.js';
 import { Decimal } from 'decimal.js';
@@ -254,15 +255,21 @@ export class Pusher {
     const nowSec = Math.floor(this.now() / 1000);
     const result: PushRunResult = { processed: 0, sent: 0, deferred: 0, cancelled: 0, failed: 0 };
 
+    reconcileReplyFailures(db,nowSec);
     runExitMonitor({db,config,logger,now:this.now,...(this.deps.blacklist?{blacklist:this.deps.blacklist}:{})});
 
     observeMilestones(db, nowSec);
     await cleanupMilestones(db, measureTelegram(this.deps.sender), this.now, logger);
 
-    // 崩溃恢复：倍率新发和首次退出送达不明时停止补发，其他任务保持有限重试。
+    // A first state reply may have reached Telegram before a crash. Block all later revisions.
+    const stranded=db.prepare("SELECT id,signal_id FROM push_tasks WHERE kind='escalate' AND status='sending' AND tg_message_id IS NULL AND updated_at<?")
+      .all(nowSec-10) as {id:number;signal_id:number}[];
+    for(const task of stranded)if(!stateMessage(db,task.signal_id))
+      blockReply(db,task.signal_id,'escalate',task.id,nowSec,'delivery_unknown');
+    // First replies and milestone replacement sends cannot be retried safely after a crash.
     db.prepare(
       `UPDATE push_tasks SET status = 'unknown', updated_at = ?,
-         attempts=CASE WHEN kind='milestone' OR (kind='exit_alert' AND tg_message_id IS NULL) THEN max_attempts ELSE attempts END
+         attempts=CASE WHEN kind='milestone' OR (kind IN ('exit_alert','escalate') AND tg_message_id IS NULL) THEN max_attempts ELSE attempts END
        WHERE status = 'sending' AND updated_at < ?`,
     ).run(nowSec, nowSec - 10);
 
@@ -358,6 +365,9 @@ export class Pusher {
     const sender = measureTelegram(this.deps.sender);
 
     try {
+      if(task.kind!=='signal'&&replyBlocked(db,task.signal_id,task.kind)){
+        this.cancelTask(task,nowSec,'reply_delivery_blocked');return 'cancelled';
+      }
       const target=db.prepare('SELECT token FROM signals WHERE id=?').get(task.signal_id) as {token:string}|undefined;
       const deferDerived=()=>{
         db.prepare("UPDATE push_tasks SET status='pending',updated_at=? WHERE id=?").run(Math.floor(this.now()/1000),task.id);
@@ -504,14 +514,29 @@ export class Pusher {
           const update=updateMessage(currentView,publishedState(db,signal.id),reason,nowSec,config.signal.strongWallets);
           if(!update.changed){this.cancelTask(task,nowSec,'unchanged_state');return 'cancelled';}
           if(getKv(db,'paused')===true){db.prepare("UPDATE push_tasks SET status='pending',updated_at=? WHERE id=?").run(nowSec,task.id);return 'deferred';}
-          const sent=await sender.sendMessage(signal.tg_chat_id??chatId,update.text,{reply_parameters:{message_id:signal.tg_message_id},disable_web_page_preview:true});
+          const anchor=stateMessage(db,signal.id);
+          if(anchor&&anchor.messageId===signal.tg_message_id){this.cancelTask(task,nowSec,'invalid_state_anchor');return 'cancelled';}
+          if(anchor&&nowSec-anchor.updatedAt<Math.max(30,config.push.editThrottleSec)){
+            db.prepare("UPDATE push_tasks SET status='pending',updated_at=? WHERE id=?").run(nowSec,task.id);return 'deferred';
+          }
+          let messageId:number;
+          const replyChat=anchor?.chatId??signal.tg_chat_id??chatId;
+          if(anchor){
+            // Persist edit intent before I/O so crash recovery distinguishes edits from first sends.
+            db.prepare('UPDATE push_tasks SET tg_message_id=? WHERE id=?').run(anchor.messageId,task.id);
+            await sender.editMessageText(replyChat,anchor.messageId,update.text,{disable_web_page_preview:true});
+            messageId=anchor.messageId;
+          }else{
+            messageId=(await sender.sendMessage(replyChat,update.text,{reply_parameters:{message_id:signal.tg_message_id},disable_web_page_preview:true})).message_id;
+          }
           nowSec=Math.floor(this.now()/1000);
-          db.transaction(()=>{
-            db.prepare("UPDATE push_tasks SET status='sent',tg_message_id=?,attempts=attempts+1,updated_at=? WHERE id=?").run(sent.message_id,nowSec,task.id);
+          try { db.transaction(()=>{
+            db.prepare("UPDATE push_tasks SET status='sent',tg_message_id=?,attempts=attempts+1,updated_at=? WHERE id=?").run(messageId,nowSec,task.id);
+            setKv(db,`state_message:${signal.id}`,{messageId,chatId:replyChat,updatedAt:nowSec},nowSec);
             setKv(db,`published_state:${signal.id}`,update.state,nowSec);
             setKv(db,`published_member_version:${signal.id}`,current.escalated_count??0,nowSec);
-          })();
-          logger.info('信号状态提示已发送',{signalId:signal.id,revision:task.revision});return 'sent';
+          })(); } catch (error) { if(!anchor)throw new TelegramDeliveryUnknownError(); throw error; }
+          logger.info('信号状态汇总已更新',{signalId:signal.id,revision:task.revision});return 'sent';
         }
         const view = loadSignalView(db, task.signal_id, nowSec);
         if (!view) {
@@ -606,6 +631,7 @@ export class Pusher {
       let messageId:number;
       if(anchor){
         if(anchor.messageId===signal.tg_message_id){this.cancelTask(task,nowSec,'invalid_exit_anchor');return 'cancelled';}
+        db.prepare('UPDATE push_tasks SET tg_message_id=? WHERE id=?').run(anchor.messageId,task.id);
         await sender.editMessageText(anchor.chatId??signal.tg_chat_id??chatId,anchor.messageId,text,{disable_web_page_preview:true});
         messageId=anchor.messageId;
       }else{
@@ -613,22 +639,30 @@ export class Pusher {
         messageId=sent.message_id;
       }
       nowSec=Math.floor(this.now()/1000);
-      db.transaction(()=>{
+      try { db.transaction(()=>{
         db.prepare("UPDATE push_tasks SET status='sent',tg_message_id=?,payload=?,attempts=attempts+1,updated_at=? WHERE id=?")
           .run(messageId,JSON.stringify(changes),nowSec,task.id);
         setKv(db,`exit_message:${task.signal_id}`,{messageId,chatId:anchor?.chatId??signal.tg_chat_id??chatId,updatedAt:nowSec,signature},nowSec);
         const known=getKv<string[]>(db,`exit_events:${task.signal_id}`)??[];
         setKv(db,`exit_events:${task.signal_id}`,[...new Set([...known,...changes.keys])],nowSec);
         setKv(db,`published_state:${task.signal_id}`,{votes:view.votes,holding:view.retentionRatio,condition:'exited',reason:null},nowSec);
-        db.prepare("UPDATE push_tasks SET status='cancelled',updated_at=? WHERE signal_id=? AND kind='escalate' AND status IN ('pending','failed','unknown')")
+        db.prepare("UPDATE push_tasks SET status='cancelled',updated_at=? WHERE signal_id=? AND kind='escalate' AND (status IN ('pending','failed') OR (status='unknown' AND attempts<max_attempts))")
           .run(nowSec,task.signal_id);
-      })();
+      })(); } catch(error) { if(!anchor)throw new TelegramDeliveryUnknownError(); throw error; }
       logger.info('退出状态提示已推送',{signalId:task.signal_id});return 'sent';
     } catch (err) {
       nowSec = Math.floor(this.now() / 1000);
+      const category=err instanceof TelegramDeliveryUnknownError?'delivery_unknown':err instanceof TelegramRateLimitError?'rate_limited':telegramFailureCategory(err);
+      setKv(db,`push_failure:${task.id}`,{taskId:task.id,signalId:task.signal_id,kind:task.kind,at:nowSec,category},nowSec);
+      if(task.kind!=='signal'&&(category==='original_missing'||category==='summary_uneditable')){
+        blockReply(db,task.signal_id,task.kind,task.id,nowSec,category);
+        this.cancelTask(task,nowSec,category);return 'cancelled';
+      }
+      const uncertainFirstState = err instanceof TelegramDeliveryUnknownError && task.kind==='escalate' && !stateMessage(db,task.signal_id);
+      if(uncertainFirstState)blockReply(db,task.signal_id,task.kind,task.id,nowSec,'delivery_unknown');
       const uncertainFirstExit = err instanceof TelegramDeliveryUnknownError && task.kind==='exit_alert' && !exitMessage(db,task.signal_id);
       const uncertainMilestone = err instanceof TelegramDeliveryUnknownError && task.kind==='milestone';
-      const attempts = uncertainFirstExit || uncertainMilestone ? task.max_attempts : task.attempts + 1;
+      const attempts = uncertainFirstExit || uncertainMilestone || uncertainFirstState ? task.max_attempts : task.attempts + 1;
       if (err instanceof TelegramRateLimitError) {
         const retryAt = nowSec + Math.max(err.retryAfterSec, 1);
         db.prepare(
