@@ -30,20 +30,25 @@ describe('SEA startup regression', () => {
     } finally { s.db.close(); }
   });
 
-  it('coalesces duplicate tokens and runs at most two evaluations concurrently', async () => {
+  it.each([2,4])('coalesces duplicate tokens and bounds evaluations to %i concurrent slots', async concurrency => {
     vi.useFakeTimers();
     const releases = new Map<string, () => void>();
     const started: string[] = [];
-    const scheduler = new EvaluationScheduler({ concurrency: 2, delayMs: 250,
+    const scheduler = new EvaluationScheduler({ concurrency, delayMs: 250,
       run: token => { started.push(token); return new Promise<void>(resolve => releases.set(token, resolve)); }, onError: vi.fn() });
-    scheduler.schedule('a'); scheduler.schedule('a'); scheduler.schedule('b'); scheduler.schedule('c');
+    const tokens=Array.from({length:concurrency+1},(_,i)=>String(i));
+    for(const token of tokens)scheduler.schedule(token);
+    scheduler.schedule('0');
     await vi.advanceTimersByTimeAsync(250);
-    expect(started).toEqual(['a', 'b']);
-    releases.get('a')!();
+    expect(started).toEqual(tokens.slice(0,concurrency));
+    expect(scheduler.snapshot()).toMatchObject({pending:1,active:concurrency});
+    releases.get('0')!();
     await vi.advanceTimersByTimeAsync(0);
-    expect(started).toEqual(['a', 'b', 'c']);
-    releases.get('b')!(); releases.get('c')!();
+    expect(started).toEqual(tokens);
+    expect(scheduler.snapshot()).toMatchObject({pending:0,active:concurrency});
+    for(const token of tokens.slice(1))releases.get(token)!();
     await vi.advanceTimersByTimeAsync(0);
+    expect(scheduler.snapshot()).toMatchObject({pending:0,active:0});
     scheduler.stop();
   });
 

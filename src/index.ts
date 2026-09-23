@@ -99,7 +99,7 @@ async function main(): Promise<void> {
 
   // 成交流入库回调：应用持仓周期 + 调度候选评估
   const evaluationScheduler = new EvaluationScheduler({
-    concurrency: 2,
+    concurrency: 4,
     delayMs: 250,
     run: async (token) => {
       const result = await evaluateToken(engineDeps, token);
@@ -220,7 +220,7 @@ async function main(): Promise<void> {
   const metricsTimer = setInterval(() => {
     runtimeMetrics.observe('runtime.event_loop.max',eventLoopDelay.max/1e6);
     eventLoopDelay.reset();
-    const snapshot = { timestamp: Math.floor(Date.now() / 1000), metrics: runtimeMetrics.snapshot() };
+    const snapshot = { timestamp: Math.floor(Date.now() / 1000), metrics: runtimeMetrics.snapshot(), evaluationQueue: evaluationScheduler.snapshot() };
     setKv(db, 'runtime_metrics', snapshot);
     log.info('运行耗时汇总', snapshot);
   }, 60_000);

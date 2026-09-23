@@ -33,6 +33,13 @@ export class EvaluationScheduler {
     }
   }
 
+  snapshot(): {pending:number;active:number;oldestWaitMs:number} {
+    const now=performance.now();
+    let oldest=now;
+    for(const at of this.queuedAt.values())oldest=Math.min(oldest,at);
+    return {pending:this.queue.length,active:this.active,oldestWaitMs:Math.max(0,now-oldest)};
+  }
+
   stop(): void {
     this.stopped = true;
     if (this.timer !== null) clearTimeout(this.timer);
