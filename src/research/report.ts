@@ -9,17 +9,23 @@ import { replay, variant, type Experiment } from './replay.js';
 export interface Sample {id:number;token:string;selected_at:number;anchor_at:number|null;stratum:number;probability:number;
   config_version:string;rules_version:string;research_version:string;state:string;baseline:string|null;
   frozen:Buffer|null;hasSnapshot:number;diagnostics:string|null;ratio:number|null;outcomeState:string|null;}
-function samples(db:Db):Sample[]{return db.prepare(`SELECT s.id,s.token,s.selected_at,s.anchor_at,s.stratum,s.probability,s.config_version,s.rules_version,s.research_version,
-  s.state,s.baseline,NULL frozen,(s.frozen IS NOT NULL) hasSnapshot,s.diagnostics,o.ratio,o.state outcomeState FROM research_samples s
-  LEFT JOIN research_outcomes o ON o.sample_id=s.id AND o.horizon=3600 ORDER BY s.selected_at,s.id`).all() as Sample[];}
 export interface ResearchScope {config_version:string;rules_version:string;research_version:string;}
 export function latestResearchScope(db:Db):ResearchScope|null {
   return db.prepare('SELECT config_version,rules_version,research_version FROM research_samples ORDER BY id DESC LIMIT 1').get() as ResearchScope|undefined ?? null;
 }
 export function firstResearchSamples(db:Db,scope:ResearchScope|null=latestResearchScope(db)):Sample[] {
-  const rows=samples(db).filter(r=>!scope||(r.config_version===scope.config_version&&r.rules_version===scope.rules_version&&r.research_version===scope.research_version));
-  const first=new Map<string,Sample>();for(const row of rows)if(!first.has(row.token))first.set(row.token,row);
-  return [...first.values()];
+  // Select IDs before reading diagnostic payloads. Repeated observations and older
+  // scopes must not copy every historical JSON payload into the collector's event loop.
+  const where=scope?'WHERE config_version=? AND rules_version=? AND research_version=?':'';
+  return db.prepare(`WITH ranked AS (
+      SELECT id,ROW_NUMBER() OVER (PARTITION BY token ORDER BY selected_at,id) ordinal
+      FROM research_samples ${where})
+    SELECT s.id,s.token,s.selected_at,s.anchor_at,s.stratum,s.probability,s.config_version,s.rules_version,s.research_version,
+      s.state,s.baseline,NULL frozen,(s.frozen IS NOT NULL) hasSnapshot,s.diagnostics,o.ratio,o.state outcomeState
+    FROM ranked r JOIN research_samples s ON s.id=r.id
+    LEFT JOIN research_outcomes o ON o.sample_id=s.id AND o.horizon=3600
+    WHERE r.ordinal=1 ORDER BY s.selected_at,s.id`)
+    .all(...(scope?[scope.config_version,scope.rules_version,scope.research_version]:[])) as Sample[];
 }
 function median(values:number[]){const a=[...values].sort((a,b)=>a-b),i=Math.floor(a.length/2);return !a.length?null:a.length%2?a[i]!:(a[i-1]!+a[i]!)/2;}
 function weightedMedian(rows:{value:number;weight:number}[]){const sorted=[...rows].sort((a,b)=>a.value-b.value);let n=0;const half=sorted.reduce((s,r)=>s+r.weight,0)/2;

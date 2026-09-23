@@ -327,3 +327,23 @@ it('keeps complete histories of relevant wallets while excluding unrelated old-w
   const clustered=s.freeze();expect(diagnose(clustered).rawVotes).toBe(2);
   expect(replay(clustered,{parameter:'clusterMerge',value:false}).rawVotes).toBe(3);
 });
+
+it('selects the earliest observation before loading diagnostics, preserving failures, ties and scope boundaries',async()=>{
+  const {firstResearchSamples}=await import('../src/research/report.js');
+  const s=await setup();
+  try {
+    for(let id=900;id<=904;id++)s.db.prepare("INSERT INTO research_runs VALUES (?,1,'v',5,5,'[]')").run(id);
+    const insert=s.db.prepare(`INSERT INTO research_samples(id,run_id,token,selected_at,stratum,probability,config_version,rules_version,research_version,state,diagnostics)
+      VALUES (?,?,?,?,1,1,?,'r','v',?,?)`);
+    insert.run(900,900,'A',10,'old','ready','{"chosen":"old"}');
+    insert.run(901,901,'A',20,'c','unavailable','{"chosen":"failed-first"}');
+    insert.run(902,902,'A',20,'c','ready','{"chosen":"later-success"}');
+    insert.run(903,903,'B',30,'c','ready','{"chosen":"later-time"}');
+    insert.run(904,904,'B',25,'c','ready','{"chosen":"earlier-time"}');
+    const scoped=firstResearchSamples(s.db,{config_version:'c',rules_version:'r',research_version:'v'});
+    expect(scoped.map(r=>r.id)).toEqual([901,904]);
+    expect(scoped[0]?.state).toBe('unavailable');expect(scoped[0]?.diagnostics).toContain('failed-first');
+    expect(firstResearchSamples(s.db,null).map(r=>r.id)).toEqual([900,904]);
+    expect(firstResearchSamples(s.db).map(r=>r.id)).toEqual([901,904]);
+  }finally{s.db.close();}
+});

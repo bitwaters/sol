@@ -43,14 +43,18 @@ export function exploreResearch(db:Db,config:ResearchConfig,now=Math.floor(Date.
   const globalCoverage=first.length?first.filter(s=>s.state==='ready').length/first.length:0;
   const rows=first.map(s=>({s,d:s.diagnostics?JSON.parse(s.diagnostics) as Diagnostics:null}));
   const groups=[...new Set(rows.map(r=>r.d?.sources.join(',')??'unknown'))];
+  // Availability is identical across these scalar experiments. Check current gap
+  // evidence once per sample per report, never cache it across report invocations.
+  const inputs=groups.map(source=>{
+    const selected=rows.filter(r=>(r.d?.sources.join(',')??'unknown')===source);
+    const available=selected.filter((r):r is {s:typeof r.s;d:Diagnostics}=>!!r.d&&r.s.hasSnapshot===1&&r.s.state==='ready'&&r.d.complete&&
+      r.d.checks.gap?.status==='pass'&&r.s.anchor_at!==null&&r.d.windowStart!==undefined&&
+      gapStatus(db,r.d.windowStart,r.s.anchor_at)==='clean');
+    return {source,selected,available};
+  });
   const factors=researchPlan.flatMap(plan=>plan.values.map(value=>{
     const experiment:Experiment={parameter:plan.parameter,value};
-    const cohorts=groups.map(source=>{
-      const selected=rows.filter(r=>(r.d?.sources.join(',')??'unknown')===source);
-      const available=selected.filter((r):r is {s:typeof r.s;d:Diagnostics}=>!!r.d&&r.s.hasSnapshot===1&&r.s.state==='ready'&&r.d.complete&&
-        r.d.checks.gap?.status==='pass'&&r.s.anchor_at!==null&&
-        // The stored gap rule uses the production window, frozen at capture. Window experiments use full replay.
-        r.d.windowStart!==undefined&&gapStatus(db,r.d.windowStart,r.s.anchor_at)==='clean');
+    const cohorts=inputs.map(({source,selected,available})=>{
       const classified=available.map(r=>({...r,next:classifyThreshold(r.d,experiment)}));
       const remainingBlockers:Record<string,{label:string;count:number}>={};
       const blockerCombinations = new Map<string,{labels:string[];count:number}>();
