@@ -115,6 +115,12 @@ export function collectOpsAlerts(db: Db, options: OpsCheckOptions): OpsAlert[] {
   if (getKv(db, 'research_enabled') === true && nowSec - started > 600) {
     const due = db.prepare("SELECT COUNT(*) n FROM research_outcomes WHERE state='pending' AND next_at<=?").get(nowSec) as {n:number};
     const progress = db.prepare("SELECT MAX(checked_at) at FROM research_outcomes WHERE last_error IS NULL OR last_error!='background_busy'").get() as {at:number|null};
+    // next_at is a retry clock; original maturity measures debt even when retries move it forward.
+    const debt=db.prepare(`SELECT COUNT(*) n,MIN(s.anchor_at+o.horizon) oldest FROM research_outcomes o
+      JOIN research_samples s ON s.id=o.sample_id WHERE o.state='pending' AND s.state='ready'
+      AND s.anchor_at+o.horizon<=?`).get(nowSec) as {n:number;oldest:number|null};
+    if(debt.n>=100&&debt.oldest!==null&&nowSec-debt.oldest>1800)alerts.push({kind:'research_backlog',severity:'warn',
+      message:`研究行情待处理 ${debt.n} 项，最早到期后已等待 ${Math.floor((nowSec-debt.oldest)/60)} 分钟；少量检查进展不代表积压已消除。`});
     if (due.n > 0 && nowSec - (progress.at ?? started) > 600) alerts.push({ kind: 'research_stalled', severity: 'error',
       message: `研究行情补采超过10分钟未完成检查，已到期积压 ${due.n} 项（最近检查：${utcTime(progress.at)}）` });
   }

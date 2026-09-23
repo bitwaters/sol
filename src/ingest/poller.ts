@@ -98,7 +98,7 @@ export class Poller {
     const started = performance.now();
     try {
       const result = await this.pollOnce();
-      this.consecutiveErrors = 0;
+      if (!result.error) this.consecutiveErrors = 0;
       return result;
     } catch (err) {
       return this.handleError(err);
@@ -117,14 +117,22 @@ export class Poller {
     let fullPage = false;
     let nextToken: string | null = null;
     let paginationStalled = false;
+    let pageFailure: {error: unknown} | undefined;
+    let lastPageAt: number | undefined;
     const seenEvents = new Set<string>();
     const initialWatermark = getSourceHealth(db, source).watermark_ts;
 
     do {
-      const data = await measureAsync(`poll.fetch.${source}`,()=>this.deps.fetchPage({
+      let data: unknown;
+      try { data = await measureAsync(`poll.fetch.${source}`,()=>this.deps.fetchPage({
         limit,
         ...(nextToken ? { nextPageToken: nextToken } : {}),
-      }));
+      })); } catch(error) {
+        if (collected.length === 0) throw error;
+        pageFailure = {error};
+        break;
+      }
+      lastPageAt = Math.floor(this.now() / 1000);
       pages += 1;
       const trades = normalizeTrackResponse(source, data);
       const repeatedPage = trades.length > 0 && trades.every(trade => seenEvents.has(trade.eventId));
@@ -167,7 +175,7 @@ export class Poller {
 
     const patch: Partial<SourceHealth> & { source: string } = {
       source,
-      last_success_at: nowSec,
+      last_success_at: lastPageAt ?? nowSec,
       head_ts: maxTs===null?priorHead:Math.max(priorHead??maxTs,maxTs),
     };
     let gapDetected = false;
@@ -243,6 +251,7 @@ export class Poller {
       watermarkTs: ingest.health.watermark_ts,
     });
 
+    const failure = pageFailure ? this.handleError(pageFailure.error) : null;
     return {
       source,
       pages,
@@ -254,7 +263,8 @@ export class Poller {
       gapCovered,
       paginationStalled,
       // 打满时提频（间隔减半，下限 250ms）；不满页恢复基准（§5.2）
-      nextIntervalMs: fullPage
+      ...(failure ? {error: failure.error} : {}),
+      nextIntervalMs: failure ? failure.nextIntervalMs : fullPage
         ? Math.max(Math.floor(this.deps.intervalMs / 2), 250)
         : this.deps.intervalMs,
     };

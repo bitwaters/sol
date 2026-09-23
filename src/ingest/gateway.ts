@@ -84,7 +84,6 @@ export class GmgnGateway {
   private backgroundInFlight = false;
   private readonly requestTimeoutMs: number;
   private dispatchTail: Promise<void> = Promise.resolve();
-  private admissions = 0;
   private nextStartAt = 0;
   private effectiveRate: number;
   private lastLimitedAt = 0;
@@ -115,9 +114,11 @@ export class GmgnGateway {
   private async admit(route:RouteName,background:boolean):Promise<()=>void> {
     const weight=ROUTE_WEIGHTS[route];
     if(weight>this.limiter.capacity)throw new Error(`GMGN limiter capacity must be at least ${weight} for ${route}`);
+    const deadline=performance.now()+10_000;
     if(background){
-      const deadline=performance.now()+5000,reserve=Math.min(3,this.limiter.capacity-weight);
-      while(this.admissions>0||this.now()<Math.max(this.nextStartAt,this.backgroundNextAt)||this.limiter.available<weight+reserve){
+      // Background traffic has its own one-weight/sec ceiling, but must get a FIFO
+      // turn even when foreground work is continuously arriving.
+      while(this.now()<this.backgroundNextAt){
         if(this.banGate.isBanned||performance.now()>=deadline)throw new BackgroundBusyError();
         await new Promise(resolve=>setTimeout(resolve,250));
       }
@@ -126,20 +127,30 @@ export class GmgnGateway {
     const previous=this.dispatchTail;
     let unlock!:()=>void;
     this.dispatchTail=new Promise<void>(resolve=>{unlock=resolve;});
-    this.admissions++;
-    const release=()=>{this.admissions--;unlock();};
-    await previous;
+    let timer:ReturnType<typeof setTimeout>|undefined;
+    try {
+      if(background)await Promise.race([previous,new Promise<never>((_,reject)=>{
+        timer=setTimeout(()=>reject(new BackgroundBusyError()),Math.max(0,deadline-performance.now()));
+      })]);
+      else await previous;
+    }catch(error){
+      // A cancelled slot cannot release successors ahead of its predecessor.
+      void previous.then(unlock);
+      throw error;
+    }finally{if(timer!==undefined)clearTimeout(timer);}
     try {
       while(true){
-        if(background&&this.banGate.isBanned)throw new BackgroundBusyError();
+        if(background&&(this.banGate.isBanned||performance.now()>=deadline))throw new BackgroundBusyError();
         await this.banGate.waitIfBanned();
         const delay=this.nextStartAt-this.now();
-        if(delay>0){await new Promise(resolve=>setTimeout(resolve,Math.min(delay,60_000)));continue;}
-        await this.limiter.acquire(weight);
+        if(delay>0){await new Promise(resolve=>setTimeout(resolve,Math.min(delay,background?250:60_000)));continue;}
+        if(background){
+          if(!this.limiter.tryAcquire(weight)){await new Promise(resolve=>setTimeout(resolve,25));continue;}
+        }else await this.limiter.acquire(weight);
         if(!this.banGate.isBanned)break;
       }
-      return release;
-    }catch(error){release();throw error;}
+      return unlock;
+    }catch(error){unlock();throw error;}
   }
 
   private rateLimit(error:unknown,route:RouteName):unknown {

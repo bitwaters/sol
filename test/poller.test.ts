@@ -117,3 +117,18 @@ describe('backfillFollow', () => {
     db.close();
   });
 });
+
+it('retains successful pages and their original heartbeat when a later page fails, then retries with backoff',async()=>{
+  const db=openDatabase({path:':memory:'});
+  try {
+    const list=smartmoneyFixture.list;let now=2_000_000_000_000,calls=0;
+    const poller=new Poller({source:'smartmoney',intervalMs:1000,limit:20,paginate:true,
+      extractNextToken:()=> 'next',db,logger:silentLogger,now:()=>now,
+      fetchPage:async()=>{calls++;if(calls===1)return {list};now+=20000;throw new Error('timeout');}});
+    const first=await poller.tick();
+    expect(first).toMatchObject({pages:1,fetched:20,insertedEvents:20,error:'timeout',nextIntervalMs:2000});
+    expect(countTrades(db)).toBe(20);expect(getSourceHealth(db,'smartmoney').last_success_at).toBe(2_000_000_000);
+    const retry=await poller.tick();expect(retry.nextIntervalMs).toBe(4000);
+    expect(countTrades(db)).toBe(20);
+  }finally{db.close();}
+});

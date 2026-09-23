@@ -71,3 +71,19 @@ describe('M5-3 数据库备份', () => {
     db.close();
   });
 });
+
+it('keeps backlog visible despite recent progress and postponed retry timestamps',()=>{
+  const db=openDatabase({path:':memory:'}),now=200000;
+  try {
+    setKv(db,'research_enabled',true);setKv(db,'service_started_at',now-10000);
+    db.prepare("INSERT INTO research_runs VALUES (1,?,'v',100,100,'[]')").run(now-5000);
+    for(let i=1;i<=101;i++){
+      db.prepare("INSERT INTO research_samples(id,run_id,token,selected_at,anchor_at,stratum,probability,config_version,rules_version,research_version,state) VALUES (?,1,?,?,?,1,1,'c','r','v','ready')").run(i,`T${i}`,now-5000,now-5000);
+      db.prepare("INSERT INTO research_outcomes(sample_id,horizon,state,next_at,checked_at,last_error) VALUES (?,300,?,?,?,NULL)").run(i,i===101?'ready':'pending',now+300,now);
+    }
+    expect(collectOpsAlerts(db,{nowSec:now}).map(a=>a.kind)).toContain('research_backlog');
+    expect(collectOpsAlerts(db,{nowSec:now}).map(a=>a.kind)).not.toContain('research_stalled');
+    db.prepare("UPDATE research_outcomes SET state='ready'").run();
+    expect(collectOpsAlerts(db,{nowSec:now}).map(a=>a.kind)).not.toContain('research_backlog');
+  }finally{db.close();}
+});

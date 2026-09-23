@@ -84,3 +84,33 @@ it('recognizes business code 429 and enforces a future cooldown for stale reset 
   await expect(s.gateway.fetchSmartmoney(1)).rejects.toMatchObject({name:'RateLimitedError'});
   expect(s.gateway.bannedUntil).toBe(epoch+1000);
 });
+
+it('admits background work behind existing traffic before newly arriving foreground traffic',async()=>{
+  const starts:Array<[string,number]>=[];
+  const s=setup({getFollowWallet:async()=>{starts.push(['follow',Date.now()-epoch]);return [];},getTokenKline:async()=>{starts.push(['background',Date.now()-epoch]);return [];}});
+  const first=s.gateway.fetchFollowWallet({});
+  const back=s.gateway.background().fetchKline('test','1m',0,1);
+  const later=Array.from({length:12},()=>s.gateway.fetchFollowWallet({}));
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(starts).toEqual([['follow',0],['background',1000]]);
+  await vi.advanceTimersByTimeAsync(13000);await Promise.all([first,back,...later]);
+  expect(starts[2]).toEqual(['follow',1200]);
+});
+it('cancels an expired background slot without allowing successors to bypass preceding requests',async()=>{
+  const times:number[]=[],kline=vi.fn(async()=>[]);
+  const s=setup({getFollowWallet:async()=>{times.push(Date.now()-epoch);return [];},getTokenKline:kline});
+  const before=Array.from({length:13},()=>s.gateway.fetchFollowWallet({}));
+  const back=s.gateway.background().fetchKline('test','1m',0,1).catch(e=>e);
+  const after=s.gateway.fetchFollowWallet({});
+  await vi.advanceTimersByTimeAsync(10000);expect(await back).toBeInstanceOf(BackgroundBusyError);
+  await vi.advanceTimersByTimeAsync(4000);await Promise.all([...before,after]);
+  expect(kline).not.toHaveBeenCalled();expect(times).toEqual(Array.from({length:14},(_,i)=>i*1000));
+  await s.gateway.background().fetchKline('test','1m',0,1);expect(kline).toHaveBeenCalledTimes(1);
+});
+it('retains the background one-weight-per-second ceiling across fair admissions',async()=>{
+  const times:number[]=[];const s=setup({getTokenKline:async()=>{times.push(Date.now()-epoch);return [];}});
+  await s.gateway.background().fetchKline('test','1m',0,1);
+  const second=s.gateway.background().fetchKline('test','1m',0,1);
+  await vi.advanceTimersByTimeAsync(1999);expect(times).toEqual([0]);
+  await vi.advanceTimersByTimeAsync(1);await second;expect(times).toEqual([0,2000]);
+});

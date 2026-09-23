@@ -9,7 +9,8 @@ import { reserveResearch, collectResearch } from './research/collector.js';
 import { evaluateResearchOutcomes } from './research/outcomes.js';
 import { repairBaselines } from './backtest/repair.js';
 import { EvaluationScheduler } from './signal/scheduler.js';
-import { runtimeMetrics } from './ops/metrics.js';
+import { runtimeMetrics, measureSync, measureAsync } from './ops/metrics.js';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { evaluateOutcomes } from './backtest/evaluate.js';
 import { adminRecipients } from './telegram/routing.js';
 import { researchSummary } from './research/summary.js';
@@ -213,7 +214,12 @@ async function main(): Promise<void> {
     } catch (error) { log.error('健康检查失败', {error}); }
   }, 30_000);
   shutdownHooks.push(() => clearInterval(healthTimer));
+  const eventLoopDelay=monitorEventLoopDelay({resolution:20});
+  eventLoopDelay.enable();
+  shutdownHooks.push(()=>eventLoopDelay.disable());
   const metricsTimer = setInterval(() => {
+    runtimeMetrics.observe('runtime.event_loop.max',eventLoopDelay.max/1e6);
+    eventLoopDelay.reset();
     const snapshot = { timestamp: Math.floor(Date.now() / 1000), metrics: runtimeMetrics.snapshot() };
     setKv(db, 'runtime_metrics', snapshot);
     log.info('运行耗时汇总', snapshot);
@@ -225,8 +231,8 @@ async function main(): Promise<void> {
   const researchDeps = { ...engineDeps, gateway: measurementGateway, research: research.config, researchVersion: research.version };
   const measurementSchedule = createResearchSchedule({
     collect: async () => {
-      await collectResearch(researchDeps);
-      advanceResearchExperiments(db,research.config);
+      await measureAsync('research.capture',()=>collectResearch(researchDeps));
+      measureSync('research.experiments',()=>advanceResearchExperiments(db,research.config));
     },
     pending: () => research.config.enabled && Boolean(db.prepare("SELECT 1 FROM research_samples WHERE state='pending' LIMIT 1").get()),
     backgroundJobs: [
@@ -238,7 +244,7 @@ async function main(): Promise<void> {
     onError: error => log.error('研究或回测任务失败', { error }),
   });
   const runControls = (): void => {
-    try { reserveResearch(researchDeps); }
+    try { measureSync('research.reserve',()=>reserveResearch(researchDeps)); }
     catch (error) { log.error('研究采样失败', { error }); }
     // Capture cadence is independent of slower historic outcome batches, including when no new run is due.
     void measurementSchedule.collectOnce();
