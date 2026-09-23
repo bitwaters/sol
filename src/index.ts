@@ -23,7 +23,7 @@ import { loadCexBlacklist } from './enrich/wallet.js';
 import { OpenApiClient } from './gmgn/OpenApiClient.js';
 import { archiveAndPrune } from './ingest/archive.js';
 import { backfillFollow } from './ingest/backfill.js';
-import { GmgnGateway } from './ingest/gateway.js';
+import { GmgnGateway, ROUTE_WEIGHTS, type GatewayLimitState } from './ingest/gateway.js';
 import { BanGate, TokenBucket } from './ingest/limiter.js';
 import { extractFollowNextToken, Poller } from './ingest/poller.js';
 import type { NormalizedTrade } from './ingest/normalize.js';
@@ -75,10 +75,15 @@ async function main(): Promise<void> {
   });
   const gateway = new GmgnGateway({
     client,
-    limiter: new TokenBucket({ ratePerSecond, capacity: 5 }),
+    limiter: new TokenBucket({ ratePerSecond, capacity: Math.max(...Object.values(ROUTE_WEIGHTS)) }),
     banGate: new BanGate(),
+    savedLimitState:getKv<GatewayLimitState>(db,'gmgn_limit_state'),
+    saveLimitState:state=>setKv(db,'gmgn_limit_state',state),
     logger: log,
   });
+
+  setKv(db,'gmgn_limit_state',gateway.limitState);
+  log.info('GMGN 请求预算',{configuredRate:ratePerSecond,effectiveRate:gateway.limitState.effectiveRate,capacity:Math.max(...Object.values(ROUTE_WEIGHTS)),followWeight:ROUTE_WEIGHTS.followWallet});
 
   const blacklist = loadCexBlacklist(join(PROJECT_ROOT, 'data', 'cex-blacklist.json'));
   const engineDeps = {

@@ -160,7 +160,7 @@ const envSchema = z.object({
   GMGN_API_KEY: z.string().min(1, 'GMGN_API_KEY 必填（见 .env.example）'),
   GMGN_PRIVATE_KEY: z.string().optional(),
   GMGN_PROXY: z.url().refine((url) => ['http:', 'https:'].includes(new URL(url).protocol), 'GMGN_PROXY 仅支持 HTTP/HTTPS 代理').optional(),
-  GMGN_RATE_LIMIT_PER_SEC: z.coerce.number().positive().finite().default(20),
+  GMGN_RATE_LIMIT_PER_SEC: z.coerce.number().positive().finite().default(10),
   TG_BOT_TOKEN: z.string().optional(),
   TG_CHAT_ID: z.string().optional(),
   TG_ADMIN_IDS: z.string().optional(),

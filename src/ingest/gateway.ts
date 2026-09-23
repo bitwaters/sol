@@ -4,18 +4,18 @@ import { BanGate, TokenBucket } from './limiter.js';
 import { runtimeMetrics } from '../ops/metrics.js';
 import { withDeadline } from '../deadline.js';
 
-/** 端点权重（来源：GMGN 官方 skill 文档，§4.2） */
+/** GMGNAI/gmgn-skills official route weights, verified 2026-09-23. */
 export const ROUTE_WEIGHTS = {
   smartmoney: 1,
   kol: 1,
-  followWallet: 3,
+  followWallet: 10,
   tokenInfo: 1,
   tokenSecurity: 1,
   tokenPool: 1,
   walletActivity: 3,
   walletStats: 3,
   walletProfits: 3,
-  walletHoldings: 5,
+  walletHoldings: 2,
   kline: 2,
 } as const;
 
@@ -42,14 +42,14 @@ function extractRateLimitInfo(
   err: unknown,
 ): { apiError: string; resetAtUnix?: number } | null {
   if (!(err instanceof Error)) return null;
-  const candidate = err as { apiError?: unknown; resetAtUnix?: unknown; status?: number };
-  if (candidate.status !== 429 && candidate.apiError !== 'RATE_LIMIT_EXCEEDED' && candidate.apiError !== 'RATE_LIMIT_BANNED') {
+  const candidate = err as { apiError?: unknown; apiCode?:unknown; resetAtUnix?: unknown; status?: number };
+  if (candidate.status !== 429 && candidate.apiCode !== 429 && candidate.apiCode !== '429' && candidate.apiError !== 'RATE_LIMIT_EXCEEDED' && candidate.apiError !== 'RATE_LIMIT_BANNED') {
     return null;
   }
   return {
     apiError: typeof candidate.apiError === 'string' ? candidate.apiError : 'HTTP_429',
     resetAtUnix:
-      typeof candidate.resetAtUnix === 'number' && candidate.resetAtUnix > 0
+      typeof candidate.resetAtUnix === 'number' && Number.isFinite(candidate.resetAtUnix) && candidate.resetAtUnix > 0 && candidate.resetAtUnix < 8.64e12
         ? candidate.resetAtUnix
         : undefined,
   };
@@ -63,7 +63,12 @@ export interface GmgnGatewayOptions {
   /** 注入时钟便于测试 */
   now?: () => number;
   requestTimeoutMs?: number;
+  /** Numeric-only cooldown/adaptive budget state; survives process restarts. */
+  savedLimitState?: GatewayLimitState | null;
+  saveLimitState?: (state: GatewayLimitState) => void;
 }
+
+export interface GatewayLimitState {bannedUntilMs:number;reason:string;effectiveRate:number;lastLimitedAt:number;}
 
 /**
  * GMGN 调用网关：统一串行化限流预算、处理 429/封禁、按端点权重计费。
@@ -78,6 +83,12 @@ export class GmgnGateway {
   private backgroundNextAt = 0;
   private backgroundInFlight = false;
   private readonly requestTimeoutMs: number;
+  private dispatchTail: Promise<void> = Promise.resolve();
+  private admissions = 0;
+  private nextStartAt = 0;
+  private effectiveRate: number;
+  private lastLimitedAt = 0;
+  private readonly saveLimitState?: (state: GatewayLimitState) => void;
 
   constructor(options: GmgnGatewayOptions) {
     this.client = options.client;
@@ -86,6 +97,62 @@ export class GmgnGateway {
     this.logger = options.logger;
     this.now = options.now ?? (() => Date.now());
     this.requestTimeoutMs = options.requestTimeoutMs ?? 20_000;
+    this.effectiveRate = this.limiter.ratePerSecond;
+    this.saveLimitState = options.saveLimitState;
+    const saved=options.savedLimitState;
+    if(saved){
+      if(Number.isFinite(saved.effectiveRate)&&saved.effectiveRate>0)this.effectiveRate=Math.min(this.effectiveRate,saved.effectiveRate);
+      if(Number.isFinite(saved.lastLimitedAt))this.lastLimitedAt=saved.lastLimitedAt;
+      if(Number.isFinite(saved.bannedUntilMs)&&saved.bannedUntilMs>this.now())this.banGate.banUntil(saved.bannedUntilMs,saved.reason);
+    }
+  }
+
+  get limitState(): GatewayLimitState {
+    return {bannedUntilMs:this.banGate.bannedUntil??0,reason:this.banGate.banReason??'',effectiveRate:this.effectiveRate,lastLimitedAt:this.lastLimitedAt};
+  }
+
+  /** Serialize admissions, not responses. Start-time pacing never banks credits during stalls. */
+  private async admit(route:RouteName,background:boolean):Promise<()=>void> {
+    const weight=ROUTE_WEIGHTS[route];
+    if(weight>this.limiter.capacity)throw new Error(`GMGN limiter capacity must be at least ${weight} for ${route}`);
+    if(background){
+      const deadline=performance.now()+5000,reserve=Math.min(3,this.limiter.capacity-weight);
+      while(this.admissions>0||this.now()<Math.max(this.nextStartAt,this.backgroundNextAt)||this.limiter.available<weight+reserve){
+        if(this.banGate.isBanned||performance.now()>=deadline)throw new BackgroundBusyError();
+        await new Promise(resolve=>setTimeout(resolve,250));
+      }
+      if(this.banGate.isBanned)throw new BackgroundBusyError();
+    }
+    const previous=this.dispatchTail;
+    let unlock!:()=>void;
+    this.dispatchTail=new Promise<void>(resolve=>{unlock=resolve;});
+    this.admissions++;
+    const release=()=>{this.admissions--;unlock();};
+    await previous;
+    try {
+      while(true){
+        if(background&&this.banGate.isBanned)throw new BackgroundBusyError();
+        await this.banGate.waitIfBanned();
+        const delay=this.nextStartAt-this.now();
+        if(delay>0){await new Promise(resolve=>setTimeout(resolve,Math.min(delay,60_000)));continue;}
+        await this.limiter.acquire(weight);
+        if(!this.banGate.isBanned)break;
+      }
+      return release;
+    }catch(error){release();throw error;}
+  }
+
+  private rateLimit(error:unknown,route:RouteName):unknown {
+    const info=extractRateLimitInfo(error);if(!info)return error;
+    const now=this.now(),alreadyBanned=this.banGate.isBanned;
+    const resetAtMs=info.resetAtUnix!=null?Math.max(now+1000,info.resetAtUnix*1000+1000):now+300_000;
+    // Concurrent in-flight failures belong to the same episode; don't repeatedly cut the budget.
+    if(!alreadyBanned)this.effectiveRate=Math.max(Math.min(2,this.limiter.ratePerSecond),this.effectiveRate*.8);
+    this.lastLimitedAt=now;
+    this.banGate.banUntil(resetAtMs,info.apiError);
+    this.saveLimitState?.(this.limitState);
+    this.logger?.warn('GMGN 限频封禁',{route,apiError:info.apiError,resetAt:new Date(this.banGate.bannedUntil!).toISOString(),effectiveRate:this.effectiveRate});
+    return new RateLimitedError(this.banGate.bannedUntil!,info.apiError);
   }
 
   get isBanned(): boolean {
@@ -96,62 +163,37 @@ export class GmgnGateway {
     return this.banGate.bannedUntil;
   }
 
-  /** 调用前：封禁门 → 权重获取 → 再查封禁门（等待期间可能新增封禁）→ 执行 */
+  /** Every outbound request shares admission pacing, weight accounting and the persisted ban. */
   async call<T>(route: RouteName, fn: (client: OpenApiClient) => Promise<T>, background = false): Promise<T> {
-    const queuedAt = performance.now();
-    if (background) {
-      if (this.backgroundInFlight) throw new BackgroundBusyError();
-      this.backgroundInFlight = true;
-      const deadline = performance.now() + 5000;
-      const reserve = Math.max(0, Math.min(3, this.limiter.capacity - ROUTE_WEIGHTS[route]));
-      while (true) {
-        if (this.banGate.isBanned || performance.now() >= deadline) {
-          this.backgroundInFlight = false;
-          throw new BackgroundBusyError();
-        }
-        // Reserve three units where capacity permits (wallet stats: weight 3 + headroom 2 in a capacity-5 bucket).
-        // Never jump ahead of queued foreground work; total rate/capacity and request weight are unchanged.
-        if (this.now() >= this.backgroundNextAt && this.limiter.available >= ROUTE_WEIGHTS[route] + reserve
-          && this.limiter.tryAcquire(ROUTE_WEIGHTS[route])) {
-          this.backgroundNextAt = this.now() + ROUTE_WEIGHTS[route] * 1000;
-          break;
-        }
-        await new Promise(resolve => setTimeout(resolve, 250));
-      }
-    } else {
-      // 排队期间可能新增封禁；过期的额度不能攒到解禁后集中释放。
-      while (true) {
-        await this.banGate.waitIfBanned();
-        await this.limiter.acquire(ROUTE_WEIGHTS[route]);
-        if (!this.banGate.isBanned) break;
-      }
-    }
-    const requestedAt = performance.now();
-    runtimeMetrics.observe(`gmgn.queue.${route}`, requestedAt - queuedAt);
-    let outcome = 'ok';
+    const queuedAt=performance.now();
+    if(background&&this.backgroundInFlight)throw new BackgroundBusyError();
+    if(background)this.backgroundInFlight=true;
+    let release:(()=>void)|undefined,requestedAt:number|undefined,outcome='ok';
     try {
-      return await withDeadline(() => fn(this.client), this.requestTimeoutMs);
-    } catch (err) {
-      outcome = 'error';
-      const rateLimit = extractRateLimitInfo(err);
-      if (rateLimit) {
-        outcome = 'limited';
-        const resetAtMs =
-          rateLimit.resetAtUnix != null
-            ? rateLimit.resetAtUnix * 1000 + 1000
-            : this.now() + 5 * 60 * 1000;
-        this.banGate.banUntil(resetAtMs, rateLimit.apiError);
-        this.logger?.warn('GMGN 限频封禁', {
-          route,
-          apiError: rateLimit.apiError,
-          resetAt: new Date(resetAtMs).toISOString(),
-        });
-        throw new RateLimitedError(resetAtMs, rateLimit.apiError);
-      }
-      throw err;
+      do {
+        release=await this.admit(route,background);
+        if(!this.banGate.isBanned)break;
+        release();release=undefined;
+      }while(true);
+      requestedAt=performance.now();
+      runtimeMetrics.observe(`gmgn.queue.${route}`,requestedAt-queuedAt);
+      // Hold the admission lock through the actual invocation. No catch-up burst after event-loop stalls.
+      this.nextStartAt=this.now()+ROUTE_WEIGHTS[route]*1000/this.effectiveRate;
+      if(background)this.backgroundNextAt=this.now()+ROUTE_WEIGHTS[route]*1000;
+      // Attach ban handling to the transport itself: even a late 429 after our deadline must close the gate.
+      let request:Promise<T>;
+      try {request=fn(this.client);}
+      catch(error){throw this.rateLimit(error,route);}
+      request=request.catch(error=>{throw this.rateLimit(error,route);});
+      release();release=undefined;
+      return await withDeadline(()=>request,this.requestTimeoutMs);
+    } catch(error) {
+      outcome=error instanceof RateLimitedError?'limited':'error';
+      throw error;
     } finally {
-      if (background) this.backgroundInFlight = false;
-      runtimeMetrics.observe(`gmgn.request.${route}.${outcome}`, performance.now() - requestedAt);
+      release?.();
+      if(background)this.backgroundInFlight=false;
+      if(requestedAt!==undefined)runtimeMetrics.observe(`gmgn.request.${route}.${outcome}`,performance.now()-requestedAt);
     }
   }
 

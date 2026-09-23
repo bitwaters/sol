@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { OpenApiClient } from '../src/gmgn/OpenApiClient.js';
-import { GmgnGateway } from '../src/ingest/gateway.js';
+import { GmgnGateway, ROUTE_WEIGHTS } from '../src/ingest/gateway.js';
 import { BanGate, TokenBucket } from '../src/ingest/limiter.js';
 import { extractFollowNextToken, Poller } from '../src/ingest/poller.js';
 import { createLogger } from '../src/logger.js';
@@ -31,7 +31,7 @@ const client = new OpenApiClient({
 });
 const gateway = new GmgnGateway({
   client,
-  limiter: new TokenBucket({ ratePerSecond, capacity: Math.max(ratePerSecond, 5) }),
+  limiter: new TokenBucket({ ratePerSecond, capacity: Math.max(...Object.values(ROUTE_WEIGHTS)) }),
   banGate: new BanGate(),
   logger: log,
 });

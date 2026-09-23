@@ -5,7 +5,7 @@ import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { loadConfig, PROJECT_ROOT } from '../src/config.js';
 import { loadCexBlacklist } from '../src/enrich/wallet.js';
 import { OpenApiClient } from '../src/gmgn/OpenApiClient.js';
-import { GmgnGateway } from '../src/ingest/gateway.js';
+import { GmgnGateway, ROUTE_WEIGHTS } from '../src/ingest/gateway.js';
 import { BanGate, TokenBucket } from '../src/ingest/limiter.js';
 import { extractFollowNextToken, Poller, type PollTickResult } from '../src/ingest/poller.js';
 import type { Logger } from '../src/logger.js';
@@ -43,7 +43,7 @@ const logger: Logger = {
 };
 const gateway = new GmgnGateway({
   client: new OpenApiClient({ apiKey: loaded.env.GMGN_API_KEY, privateKeyPem: loaded.env.GMGN_PRIVATE_KEY.replace(/\\n/g, '\n'), host: 'https://openapi.gmgn.ai', autoRetryOnRateLimit: false }),
-  limiter: new TokenBucket({ ratePerSecond: loaded.env.GMGN_RATE_LIMIT_PER_SEC, capacity: Math.max(5, loaded.env.GMGN_RATE_LIMIT_PER_SEC) }),
+  limiter: new TokenBucket({ ratePerSecond: loaded.env.GMGN_RATE_LIMIT_PER_SEC, capacity: Math.max(...Object.values(ROUTE_WEIGHTS)) }),
   banGate: new BanGate(), logger,
 });
 const engineDeps = { ...loaded, db, gateway, logger, blacklist: loadCexBlacklist(join(PROJECT_ROOT, 'data', 'cex-blacklist.json')) };

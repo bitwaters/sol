@@ -9,16 +9,16 @@ export const realClock: Clock = {
 };
 
 export interface TokenBucketOptions {
-  /** 每秒补充的权重数（GMGN leaky bucket rate=20） */
+  /** 本项目每秒补充的权重数，不等同于账号套餐总额度 */
   ratePerSecond: number;
-  /** 突发容量（capacity=20） */
+  /** 必须容纳所调用端点的最大单次权重 */
   capacity: number;
   clock?: Clock;
 }
 
 /**
  * 全局 Token Bucket：所有 GMGN 请求共享同一预算。
- * 权重按端点消耗（smartmoney/kol=1，follow=3，token=1，kline=2，wallet_stats=3 ...）。
+ * 权重按端点消耗（smartmoney/kol=1，follow=10，token=1，kline=2，wallet_stats=3 ...）。
  */
 export class TokenBucket {
   private tokens: number;
@@ -39,6 +39,7 @@ export class TokenBucket {
 
   /** Fixed burst capacity, used to reserve feasible background headroom. */
   get capacity(): number { return this.opts.capacity; }
+  get ratePerSecond(): number { return this.opts.ratePerSecond; }
 
   /** 当前可用权重（含补算） */
   get available(): number {
@@ -143,7 +144,7 @@ export class BanGate {
 
   async waitIfBanned(): Promise<void> {
     while (this.isBanned) {
-      await this.clock.sleep(this.bannedUntilMs - this.clock.now());
+      await this.clock.sleep(Math.min(60_000,this.bannedUntilMs - this.clock.now()));
     }
   }
 }

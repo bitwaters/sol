@@ -711,12 +711,14 @@ export class OpenApiClient {
       throw new Error(msg);
     };
 
-    const resetAtUnix = parseRateLimitReset(res.headers.get("x-ratelimit-reset"));
+    const resetAtUnix = Math.max(parseRateLimitReset(res.headers.get("x-ratelimit-reset")) ?? 0,
+      parseRetryAfter(res.headers.get("retry-after")) ?? 0) || undefined;
 
     let text!: string;
     try {
       text = await res.text();
     } catch (err) {
+      if (res.status === 429) throw new OpenApiError({ method, path, status: 429, apiError: 'RATE_LIMIT_EXCEEDED', resetAtUnix });
       fail(`${method} ${path} failed: HTTP ${res.status} (failed to read response body: ${err})`);
     }
 
@@ -728,7 +730,10 @@ export class OpenApiClient {
       fail(`${method} ${path} failed: HTTP ${res.status} (non-JSON response)`, text);
     }
 
-    if (!json || typeof json !== 'object') fail(`${method} ${path} failed: invalid response envelope`, text);
+    if (!json || typeof json !== 'object') {
+      if (res.status === 429) throw new OpenApiError({ method, path, status: 429, apiError: 'RATE_LIMIT_EXCEEDED', resetAtUnix });
+      fail(`${method} ${path} failed: invalid response envelope`, text);
+    }
     if (!res.ok || json.code !== 0) {
       if (process.env.GMGN_DEBUG) {
         console.error(`${curlStr}\n${formatResponse(res, text)}`);
@@ -778,8 +783,16 @@ function parseRateLimitReset(raw: string | null): number | undefined {
   if (raw == null || raw.trim() === "") {
     return undefined;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 && parsed < 8.64e12 ? parsed : undefined;
+}
+
+function parseRetryAfter(raw: string | null): number | undefined {
+  if (!raw?.trim()) return undefined;
+  const seconds=Number(raw);
+  if(Number.isFinite(seconds)&&seconds<0)return undefined;
+  const at=Number.isFinite(seconds)?Date.now()/1000+seconds:Date.parse(raw)/1000;
+  return Number.isFinite(at)&&at>0&&at<8.64e12?at:undefined;
 }
 
 function getAutoRetryMaxWaitMs(): number {

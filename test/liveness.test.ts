@@ -53,7 +53,8 @@ it('a hung foreground request releases the poller for the next tick without late
   try {
     const pending=poller.tick();await vi.advanceTimersByTimeAsync(20);
     expect((await pending).error).toBe('request_deadline_exceeded');
-    expect((await poller.tick()).error).toBeUndefined();
+    const next=poller.tick();await vi.advanceTimersByTimeAsync(100);
+    expect((await next).error).toBeUndefined();
     expect(client.getKol).toHaveBeenCalledTimes(2);
   } finally {db.close();}
 });

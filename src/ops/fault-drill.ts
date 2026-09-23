@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { OpenApiClient } from '../gmgn/OpenApiClient.js';
-import { GmgnGateway, RateLimitedError } from '../ingest/gateway.js';
+import { GmgnGateway, RateLimitedError, ROUTE_WEIGHTS } from '../ingest/gateway.js';
 import { BanGate, TokenBucket } from '../ingest/limiter.js';
 import { Poller } from '../ingest/poller.js';
 import { openDatabase } from '../store/db.js';
@@ -39,7 +39,7 @@ let db = openDatabase({ path: join(directory, 'test.sqlite') });
 try {
   const gateway = new GmgnGateway({ client: new OpenApiClient({ host: `http://127.0.0.1:${port}`,
     apiKey: 'synthetic-test-key', timeoutMs: 500, autoRetryOnRateLimit: false }),
-    limiter: new TokenBucket({ ratePerSecond: 10, capacity: 5 }), banGate: new BanGate(), logger });
+    limiter: new TokenBucket({ ratePerSecond: 10, capacity: Math.max(...Object.values(ROUTE_WEIGHTS)) }), banGate: new BanGate(), logger });
   const makePoller = () => new Poller({ source: 'smartmoney', intervalMs: 100, limit: 100,
     db, logger, fetchPage: () => gateway.fetchSmartmoney(100) });
   const poller = makePoller();

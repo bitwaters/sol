@@ -13,3 +13,5 @@
     `setGlobalDispatcher(ProxyAgent)` 支持 HTTP(S) 代理（不支持 SOCKS）
   - 上游自带 429 自动重试；本项目构造客户端时明确传入
     `autoRetryOnRateLimit: false`，由自有 Token Bucket + BanGate 统一处理
+
+- 2026-09-23：429 响应支持 Retry-After，正文不可读或不是合法对象时仍保留限频分类；实际发送节奏、端点权重和跨重启冷却由共享网关管理。
